@@ -58,7 +58,7 @@ def _from_filename(path: Path, out_dir: Path, up, spec_fn) -> dict:
     # prompt may itself contain dots, and cfg/smx values do ("smx0.92"), so match the
     # optional segments from the end rather than splitting on "."
     m = re.fullmatch(r"(?P<prompt>.*?)(?:\.neg-(?P<neg>.*?))?(?:\.cfg(?P<cfg>[\d.]+))?"
-                     r"(?:\.smx(?P<smx>[\d.]+))?\.(?P<seed>-?\d+)", path.stem)
+                     r"(?:\.smx(?P<smx>[\d.]+))?\.(?P<seed>-?\d+)(?:\.[0-9a-f]{8})?", path.stem)
     if m:
         prompt, neg, seed = m["prompt"], m["neg"] or "", m["seed"]
         cfg, smx = float(m["cfg"] or 1.0), float(m["smx"] or 1.0)

@@ -7,9 +7,13 @@ persist.py). Together the sidecars ARE the raw dataset — one row per audio fil
     "gen"        everything needed to regenerate it bit-for-bit: models + resolved
                  checkpoint files, prompt, negative prompt, seed, seconds, steps,
                  cfg, apg, sigma_max, mode, LoRAs (path, sha256, strength, step
-                 range), a2a / inpaint input audio (archived copy), code commit,
-                 plus the measured timings
-    "label"      {"score": 0-10 | null, "tags": [str], "updated": iso time}
+                 range), a2a / inpaint input audio (archived copy) + init noise
+                 level / range, code commit, plus the measured timings. Keys that
+                 don't apply (no LoRA, no a2a, no inpaint, empty negative prompt)
+                 are left out, never written as null / []
+    "label"      {"score": 0-10 | null, "tags": [str], "updated": iso time,
+                 "deleted": iso time (only when the clip was trashed in the UI:
+                 score forced to 0, audio + sidecar moved to deleted/)}
     "analysis"   measured, not labelled: {"tempo": {bpm, conf, prompt_bpm, tier
                  green|yellow|orange|none|nobeat, fold, err}} (tempo.py), filled
                  in by a background thread the first time the UI asks for a label
@@ -20,8 +24,14 @@ entry fields (prompt, seed, dit, cfg, sigma); their label still works.
 This module also serves the browser side, as plain routes added to gradio's
 FastAPI app (so a score click never waits behind a running render in the queue):
 
-    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm", "prompt"}  (bpm may be {"pending"})
+    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm", "prompt", "loras"}  (bpm may be {"pending"};
+                                       loras: [{name, strength, steps}] of the LoRAs active in that render)
     POST /sa3/label  {name, score?, tags?}   writes the sidecar's "label" at once
+    GET  /sa3/settings?name=<file>  → restore_settings(): every setting that made the render
+                                    (the settings button's hover card shows these)
+    POST /sa3/delete?name=<file>    trash a render: label score 0 + "deleted", then audio +
+                                    sidecar move to OUT_DIR/deleted/ (out of the UI and the
+                                    Library, kept on disk as a negative training example)
     GET  /sa3/progress              → live progress of the running render
     GET  /sa3/boot                  → server boot id (the page reloads when it changes)
     GET  /sa3/library               → every render as a filterable row (Library modal)
@@ -79,6 +89,12 @@ def _sidecar(p: Path) -> Path:
     return p.with_name(p.name + ".json")
 
 
+def _lora_brief(d: dict) -> list[dict]:
+    """The LoRAs active in a render (name, strength, step window), for the UI's LoRA badge."""
+    return [{k: x.get(k) for k in ("name", "strength", "steps")}
+            for x in (d.get("gen") or {}).get("loras") or []]
+
+
 def read_label(name: str) -> dict | None:
     p = _audio_path(name)
     if p is None:
@@ -90,7 +106,8 @@ def read_label(name: str) -> dict | None:
     lab = d.get("label") or {}
     return {"score": lab.get("score"), "tags": lab.get("tags") or [],
             "has_gen": "gen" in d, "bpm": _tempo_of(p, d),
-            "prompt": (d.get("gen") or {}).get("prompt", d.get("prompt"))}
+            "prompt": (d.get("gen") or {}).get("prompt", d.get("prompt")),
+            "loras": _lora_brief(d)}
 
 
 def restore_settings(name: str) -> dict | None:
@@ -113,7 +130,7 @@ def restore_settings(name: str) -> dict | None:
             return str(OUT_DIR / rel) if rel and (OUT_DIR / rel).is_file() else None
         return {k: g[k] for k in ("dit", "decoder", "prompt", "negative_prompt", "seed", "seconds",
                                   "steps", "cfg", "apg", "sigma_max", "mode", "inpaint_range_sec")
-                if k in g} | {"loras": g.get("loras") or [], "a2a_audio": inp(g.get("a2a_audio")),
+                if k in g} | {"negative_prompt": g.get("negative_prompt", ""), "loras": g.get("loras") or [], "a2a_audio": inp(g.get("a2a_audio")),
                              "inpaint_audio": inp(g.get("inpaint_audio")), "full": True}
     out = {"full": False}
     for src, dst in (("dit", "dit"), ("prompt", "prompt"), ("neg", "negative_prompt"), ("seed", "seed"),
@@ -162,6 +179,8 @@ def _tempo_worker() -> None:
         except Exception as e:
             t = {"v": TEMPO_V, "error": str(e)[:200]}
         with _lock:
+            if not p.exists():                 # trashed while we measured: don't recreate its sidecar
+                continue
             try:
                 d = json.loads(sc.read_text())
             except Exception:
@@ -200,6 +219,33 @@ def write_label(name: str, score=..., tags=...) -> dict | None:
         tmp.write_text(json.dumps(d))
         tmp.replace(sc)
     return {"score": lab.get("score"), "tags": lab.get("tags") or []}
+
+
+def delete_render(name: str) -> bool:
+    """Trash button: score the clip 0, stamp label.deleted, move audio + sidecar into
+    OUT_DIR/deleted/. Reversible by moving the two files back."""
+    p = _audio_path(name)
+    if p is None:
+        return False
+    write_label(name, score=0)
+    dst = OUT_DIR / "deleted"
+    dst.mkdir(exist_ok=True)
+    sc = _sidecar(p)
+    with _lock:
+        try:
+            d = json.loads(sc.read_text())
+        except Exception:
+            d = {"name": p.name}
+        d["label"] = {**(d.get("label") or {}), "deleted": datetime.now().isoformat(timespec="seconds")}
+        sc.write_text(json.dumps(d))
+        stem, i = p.name, 1
+        while (dst / stem).exists():          # never overwrite an earlier trashed clip
+            stem = f"{p.stem}.{i}{p.suffix}"
+            i += 1
+        shutil.move(str(sc), str(dst / (stem + ".json")))
+        shutil.move(str(p), str(dst / stem))
+    _rows.pop(p.name, None)
+    return True
 
 
 # ── regeneration metadata ──────────────────────────────────────────────────
@@ -283,10 +329,10 @@ def gen_record(bound: inspect.BoundArguments, timings: dict | None) -> dict:
             "audio-to-audio" if a2a else "text-to-audio")
     loras = []
     for s in a.get("lora_specs") or []:
-        loras.append({"path": s["path"], "sha256": _sha256(s["path"]),
+        loras.append({"name": os.path.basename(s["path"]), "path": s["path"], "sha256": _sha256(s["path"]),
                       "strength": s["strength"], "steps": list(s["steps"]) if s["steps"] else None})
     t = timings or {}
-    return {
+    g = {
         "schema": 1,
         "created": datetime.now().isoformat(timespec="seconds"),
         "mode": mode,
@@ -314,6 +360,13 @@ def gen_record(bound: inspect.BoundArguments, timings: dict | None) -> dict:
                        ("t5_ms", "sample_ms", "decode_ms", "inference_ms", "dit_load_ms", "enc_ms")
                        if k in t} | ({"T_lat": int(t["T_lat"])} if "T_lat" in t else {}),
     }
+    # only what applies: no LoRA / a2a / inpaint / negative-prompt keys on a plain render
+    # (readers treat an absent key as "off"). On a2a renders sigma_max IS the guide's
+    # init_noise_level, so it's also recorded under that name.
+    if a2a:
+        g["init_noise_level"] = g["sigma_max"]
+    optional = ("negative_prompt", "a2a_audio", "inpaint_audio", "inpaint_range_sec", "loras")
+    return {k: v for k, v in g.items() if k not in optional or v not in (None, [], "")}
 
 
 # ── speed model + live progress ────────────────────────────────────────────
@@ -382,54 +435,86 @@ _prog: dict = {"active": False}
 def progress_start(bound: inspect.BoundArguments) -> None:
     a = bound.arguments
     est = estimate_ms(a["dit_name"], float(a["seconds"]), int(a["steps"]), float(a["cfg"]))
+    now = time.time()
     _prog.clear()
-    _prog.update(active=True, t0=time.time(), phase="text", step=0, steps=int(a["steps"]),
-                 est=est, step_t=None)
+    _prog.update(active=True, t0=now, phase="text", step=0, steps=int(a["steps"]), est=est,
+                 end=now + est["total"] / 1000, rev=0)
+
+
+def _replan(end: float) -> None:
+    """Move the projected finish time. Only called on real state transitions (a step
+    finished, decode began), so the ETA counts down smoothly in between instead of
+    being re-derived on every poll."""
+    _prog["end"] = end
+    _prog["rev"] = _prog.get("rev", 0) + 1
 
 
 def progress_step(i: int) -> None:
-    if _prog.get("active"):
-        if i == 0:
-            _prog["sample_t0"] = time.time()
-        _prog.update(phase="sampling", step=i, step_t=time.time())
+    """Called before sampling step i, i.e. once i steps are finished."""
+    if not _prog.get("active"):
+        return
+    now, est, n = time.time(), _prog["est"], max(1, _prog["steps"])
+    if i == 0:
+        _prog["sample_t0"] = now
+        per = est["sample"] / 1000 / n
+    else:   # measured step time; trust it more as steps accumulate
+        meas = (now - _prog["sample_t0"]) / i
+        w = min(1.0, i / 2)
+        per = w * meas + (1 - w) * est["sample"] / 1000 / n
+    _prog.update(phase="sampling", step=i)
+    _replan(now + per * (n - i) + est["decode"] / 1000)
 
 
 def progress_phase(phase: str) -> None:
     if _prog.get("active"):
         _prog["phase"] = phase
         if phase == "decode":
-            _prog["dec_t0"] = time.time()
+            _replan(time.time() + _prog["est"]["decode"] / 1000)
 
 
 def progress_end() -> None:
     _prog["active"] = False
+    _jobs["t_end"] = time.time()
+
+
+# batch queue: every Generate click is a job in gradio's queue (trigger_mode="multiple",
+# studio.py). We count clicks (a non-queued listener) and starts to show "+N queued".
+_jobs = {"submitted": 0, "started": 0, "t_submit": 0.0, "t_end": 0.0}
+
+
+def job_submitted() -> None:
+    _jobs["submitted"] += 1
+    _jobs["t_submit"] = time.time()
+
+
+def job_started() -> None:
+    _jobs["started"] += 1
+    _jobs["submitted"] = max(_jobs["submitted"], _jobs["started"])
+
+
+def jobs_cleared() -> None:
+    """Stop cancels everything still waiting in gradio's queue."""
+    _jobs["submitted"] = _jobs["started"]
+
+
+def jobs_waiting() -> int:
+    # self-heal drift (a tab closed with jobs pending drops them from gradio's queue):
+    # nothing running and nothing submitted or finished for a while means no queue
+    if not _prog.get("active") and time.time() - max(_jobs["t_end"], _jobs["t_submit"]) > 5:
+        _jobs["submitted"] = _jobs["started"]
+    return max(0, _jobs["submitted"] - _jobs["started"])      # `started` already counts the running job
 
 
 def progress() -> dict:
-    """Fraction done + seconds left, blending the estimate with real step progress."""
+    """Projected finish time (moves only on transitions) + current phase. The client
+    animates the bar and countdown locally from t0/end; `rev` tells it a replan happened."""
     if not _prog.get("active"):
-        return {"active": False}
+        return {"active": False, "waiting": jobs_waiting()}
     now = time.time()
-    est = _prog["est"]
-    el = (now - _prog["t0"]) * 1000
-    t5, smp, dec = est["t5"], est["sample"], est["decode"]
-    ph = _prog["phase"]
-    if ph == "sampling" and _prog.get("sample_t0"):
-        n = max(1, _prog["steps"])
-        done = _prog["step"]                       # steps fully finished before this one
-        s_el = (now - _prog["sample_t0"]) * 1000
-        per = s_el / done if done else smp / n     # measured step time once we have one
-        smp_left = max(0.0, per * n - s_el)
-        left = smp_left + dec
-    elif ph == "decode" and _prog.get("dec_t0"):
-        left = max(0.0, dec - (now - _prog["dec_t0"]) * 1000)
-    else:
-        left = max(0.0, t5 - el) + smp + dec
-    total = el + left
-    frac = min(0.99, el / total) if total > 0 else 0.0
-    return {"active": True, "frac": round(frac, 4), "elapsed_s": round(el / 1000, 1),
-            "left_s": round(left / 1000, 1), "phase": ph,
-            "step": _prog.get("step", 0), "steps": _prog.get("steps"), "history_n": est["n"]}
+    return {"active": True, "run": _prog["t0"], "waiting": jobs_waiting(), "elapsed_s": round(now - _prog["t0"], 2),
+            "left_s": round(max(0.0, _prog["end"] - now), 2), "rev": _prog["rev"],
+            "phase": _prog["phase"], "step": _prog.get("step", 0), "steps": _prog.get("steps"),
+            "history_n": _prog["est"]["n"]}
 
 
 # ── library browser: every render as one filterable row (the studio's Library modal) ──
@@ -461,7 +546,7 @@ def library_rows() -> list[dict]:
                "prompt": g.get("prompt", d.get("prompt")) or "",
                "dit": g.get("dit", d.get("dit")), "seed": g.get("seed", d.get("seed")),
                "seconds": g.get("seconds"), "steps": g.get("steps"), "cfg": g.get("cfg", d.get("cfg")),
-               "mode": g.get("mode", d.get("mode")), "lora": bool(g.get("loras") or d.get("lora")),
+               "mode": g.get("mode", d.get("mode")), "lora": bool(g.get("loras") or d.get("lora")), "loras": _lora_brief(d),
                "score": lab.get("score"), "tags": lab.get("tags") or [],
                "has_spec": bool(d.get("spec_b64")), "bpm": _tempo_of(p, d)}
         if not row["bpm"].get("pending"):
@@ -504,6 +589,15 @@ def install_routes() -> None:
         return JSONResponse(r if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
+    def settings_get(name: str):     # sync: legacy renders probe the clip length with ffprobe
+        r = restore_settings(name)
+        return JSONResponse(r if r is not None else {"error": "unknown file"},
+                            status_code=200 if r is not None else 404)
+
+    def delete_post(name: str):      # POST /sa3/delete?name=…; sync: disk moves run in the threadpool
+        ok = delete_render(name)
+        return JSONResponse({"ok": ok}, status_code=200 if ok else 404)
+
     async def progress_get():
         return JSONResponse(progress())
 
@@ -528,6 +622,8 @@ def install_routes() -> None:
         app = orig(*a, **kw)
         app.add_api_route("/sa3/label", label_get, methods=["GET"])
         app.add_api_route("/sa3/label", label_post, methods=["POST"])
+        app.add_api_route("/sa3/delete", delete_post, methods=["POST"])
+        app.add_api_route("/sa3/settings", settings_get, methods=["GET"])
         app.add_api_route("/sa3/progress", progress_get, methods=["GET"])
         app.add_api_route("/sa3/library", library_get, methods=["GET"])
         app.add_api_route("/sa3/boot", boot_get, methods=["GET"])

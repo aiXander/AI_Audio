@@ -5,8 +5,11 @@ studio.py builds the UI by patching upstream's sa3_gradio before calling its
 main(), so instead this supervisor runs studio.py as a child process and:
 
 - polls the mtimes of sa3lab/*.py|css|js and upstream's sa3_gradio.py,
-- on a change, waits until no render is running (GET /sa3/progress), then
-  restarts the child (the model pre-warm is the only cost, ~10-20 s),
+- on a change, waits until no render is running or queued (GET /sa3/progress)
+  and the server has stayed idle for IDLE_S, then restarts the child (the model
+  pre-warm is the only cost, ~10-20 s). The idle window matters: /sa3/progress
+  goes inactive when the model call returns, but the render is then still being
+  saved and sent to the page; a server too busy to answer counts as busy too,
 - after a crash (e.g. a syntax error mid-edit) waits for the next change
   instead of crash-looping.
 
@@ -21,6 +24,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -39,12 +43,20 @@ def _snapshot() -> dict[str, float]:
     return out
 
 
+IDLE_S = 8.0     # continuous idle needed before a restart (render delivery tail, back-to-back queue)
+
+
 def _busy(port: str) -> bool:
+    """A render running or queued. Only a refused connection (server down) reads as idle:
+    a timeout means the server is alive but too loaded to answer, i.e. mid-render."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/sa3/progress", timeout=2) as r:
-            return bool(json.load(r).get("active"))
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/sa3/progress", timeout=5) as r:
+            d = json.load(r)
+            return bool(d.get("active") or d.get("waiting"))
+    except urllib.error.URLError as e:
+        return not isinstance(e.reason, ConnectionRefusedError)
     except Exception:
-        return False
+        return True
 
 
 def main() -> None:
@@ -87,10 +99,18 @@ def main() -> None:
         changed = sorted({Path(k).name for k in set(now) | set(snap) if now.get(k) != snap.get(k)})
         time.sleep(0.6)                     # let an editor finish writing
         snap = _snapshot()
-        if _busy(port):
-            print("[devwatch] code changed; waiting for the running render to finish", flush=True)
-            while _busy(port):
-                time.sleep(2)
+        idle_since, told = None, False
+        while child.poll() is None:          # a dead child restarts at once
+            if _busy(port):
+                idle_since = None
+                if not told:
+                    print("[devwatch] code changed; waiting for the running render to finish", flush=True)
+                    told = True
+            elif idle_since is None:
+                idle_since = time.time()
+            elif time.time() - idle_since >= IDLE_S:
+                break
+            time.sleep(1)
         print(f"[devwatch] code changed ({', '.join(changed)}); restarting studio", flush=True)
         stop()
         start()

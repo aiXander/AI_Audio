@@ -7,6 +7,17 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - relabels a few controls (labels, placeholders, info lines) by wrapping the
   component constructors, so every event wiring upstream stays intact,
 - tags the output-column HTML slots with classes so CSS/JS can target them,
+- renders the newest clip as the first card of the history list (_row_player:
+  upstream's history-row markup, main-player audio behaviour kept), with the
+  whole output column scrolling as one list (studio.css hides the "Output"
+  heading and upstream's speed / seed stats line); hitting its bottom appends 10 older renders at a time (studio.js
+  mountMore, rows from /sa3/library); a LoRA badge on any render that had an
+  active LoRA lists them on hover (studio.js loraChip, gen.loras via
+  /sa3/label); resting 0.5 s on a clip's "settings" button shows every
+  setting that made it (studio.js showSettings, /sa3/settings),
+  each card's caption is the prompt alone (click it to copy, studio.js), and
+  the sidebar icon left of the logo (or "\\") collapses the controls column for
+  a full-width list (studio.js mountFocus),
 - renders the spectrogram at full HD (hispec.py) instead of upstream's ~16 col/s,
 - persists every render's entry as a sidecar and restores the last renders on
   page load (persist.py), since upstream keeps history only in session state,
@@ -20,9 +31,21 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - serves a live progress estimate (library.py) from past render speeds and
   the sampler's real step count,
 - restores every setting of any past render into the controls with one click
-  (see _add_restore_settings),
-- lays out one sticky top line (logo + a centred Generate / Stop / auto-play
-  bar) above 40/60 columns (see _layout),
+  (see _add_restore_settings); the same path keeps the live control state
+  (model, prompt, sampling, a2a / inpaint inputs, LoRA slots) in
+  .studio_prefs.json and puts it back on every page load, so a server restart
+  loses nothing,
+- puts the prompt first at full width, Seed (empty = random) next to Model /
+  Codec (_layout),
+- lays out one sticky top line (logo left, Generate / Stop dead centre at
+  full bar height, auto-play + Library right) above 40/60 columns (see _layout); resting the cursor 0.5 s in the gap
+  between them shows a drag bar to resize (studio.js mountSplit, kept in
+  localStorage, double-click resets),
+- restyles the LoRA panel into one card per slot (_lora_tags + studio.css):
+  file or loras/ pick + remove on one line, strength (0.05 steps) and the
+  From/To step window (the sampler steps the adapter is applied on) as
+  read-only readouts, an "N active" badge on the accordion header; the pick
+  dropdown lists every .safetensors under stable-audio-3/loras/ (_lora_library),
 - injects a dark theme, CSS, fonts and a small JS layer at `launch()`
   (gradio 6 takes theme/css/js/head there), and forces localhost-only,
   no share link.
@@ -32,11 +55,14 @@ Run with the MLX venv:  sa3lab/studio  [--dit medium] [--port 7860]
 from __future__ import annotations
 
 import functools
+import html as html_lib
 import inspect
+import re
 import json
 import os
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 AI_AUDIO = Path(__file__).resolve().parents[1]
@@ -86,8 +112,14 @@ ACCORDION = {
 PLACEHOLDER = {
     "Prompt": "Describe the sound. Tag-style works best, e.g.  "
               "TrackType: Music, Genre: Dub Techno, BPM: 120, Moods: Hypnotic",
-    "Seed (optional)": "random",
 }
+# upstream's LoRA slot widgets → our labels + classes; studio.css turns each slot into
+# a compact card (file / library pick + remove on one line, strength full width,
+# the active-step window below). "Min/Max step" are the sampler steps the adapter
+# is applied on (1..Steps), relabelled because the narrow column cut them to "M".
+LORA_SLIDER = {"strength": ("Strength", "sa3-lora-str"),
+               "Min step": ("From step", "sa3-lora-step"),
+               "Max step": ("To step", "sa3-lora-step")}
 # the five gr.HTML slots of the output column, in creation order
 OUT_SLOTS = ["sa3-player", "sa3-timing", "sa3-error", "sa3-queued", "sa3-history"]
 
@@ -116,6 +148,43 @@ def _relabel(a, kw):
     if lab == "Prompt":
         kw["lines"] = 3
     return a, kw
+
+
+def _cls(kw, c):
+    kw["elem_classes"] = list(kw.get("elem_classes") or []) + [c]
+
+
+def _lora_tags(a, kw):
+    lab = kw.get("label") or ""
+    if lab in LORA_SLIDER:
+        kw["label"], c = LORA_SLIDER[lab]
+        _cls(kw, c)
+        if c == "sa3-lora-str":
+            kw["step"] = 0.05           # upstream 0.1; step sliders stay integer
+    elif re.match(r"LoRA \d \(\.safetensors\)$", lab):       # gr.File
+        _cls(kw, "sa3-lora-file")
+        kw["show_label"], kw["height"] = False, None
+    elif lab.startswith("…or pick from loras/"):              # gr.Dropdown (only shown when loras/<model>/ has files)
+        _cls(kw, "sa3-lora-dd")
+        kw["show_label"] = False
+    elif (a[:1] or [kw.get("value")])[0] == "✕":              # gr.Button: remove slot
+        _cls(kw, "sa3-lora-rm")
+    elif (a[:1] or [kw.get("value")])[0] == "+ Add LoRA":
+        _cls(kw, "sa3-lora-add")
+    return a, kw
+
+
+LORA_LIB = Path(__file__).resolve().parent.parent / "stable-audio-3" / "loras"
+
+
+def _lora_library(dit_name: str) -> list:
+    """Replaces upstream's _lora_dd_choices: every .safetensors under
+    stable-audio-3/loras/ (subfolders included, same list for every model), shown
+    as its path relative to that folder without the extension."""
+    hits = sorted(p for p in LORA_LIB.rglob("*.safetensors")
+                  if not any(part.startswith(".") for part in p.relative_to(LORA_LIB).parts))
+    return [("from loras/ folder…", up._DD_NONE)] + [
+        (str(p.relative_to(LORA_LIB).with_suffix("")), str(p)) for p in hits]
 
 
 def _accordion(a, kw):
@@ -235,6 +304,18 @@ def _install_stop_hooks():
         return orig_dec(*a, **kw)
     up.get_decoder = get_decoder
 
+    # every render gets a uuid: upstream names files prompt[.cfg…].{seed}, so re-rendering
+    # the same prompt + seed (e.g. with a different LoRA) silently overwrote the earlier clip
+    # and its label. Filename gets the first 8 hex chars, the sidecar's gen block the full id.
+    orig_vb = up.verbose_basename
+
+    def verbose_basename(*a, **kw):
+        uid = uuid.uuid4().hex
+        if getattr(_tl, "gen", None) is not None:   # same handler thread, set just before
+            _tl.gen["uid"] = uid
+        return f"{orig_vb(*a, **kw)}.{uid[:8]}"
+    up.verbose_basename = verbose_basename
+
 
 def _wire_handlers(demo):
     """Wrap generate/promote/pregen: tag them with stop epochs, attach the captured
@@ -247,7 +328,12 @@ def _wire_handlers(demo):
         gen_fns.append(bf)
         orig = bf.fn
 
-        def wrapped(*a, _orig=orig, _new=bf.name != "pregen"):
+        if bf.name == "generate":   # every click queues a job (gradio's default drops clicks while one runs)
+            bf.trigger_mode = "multiple"
+
+        def wrapped(*a, _orig=orig, _new=bf.name != "pregen", _gen=bf.name == "generate"):
+            if _gen:
+                library.job_started()
             if _new:
                 _stop["epoch"] += 1
             _tl.epoch = _stop["epoch"]
@@ -269,11 +355,18 @@ def _wire_handlers(demo):
     stop_btn = next(b for b in demo.blocks.values()
                     if isinstance(b, gr.Button) and b.elem_id == "sa3-stop")
 
+    gen_btn = next(b for b in demo.blocks.values()
+                   if isinstance(b, gr.Button) and b.elem_id == "sa3-generate")
+
     def stop():
         _stop["stopped_upto"] = _stop["epoch"]
-    with demo:   # cancels also drops renders still waiting in gradio's queue
+        library.jobs_cleared()
+    with demo:   # cancels also drops renders still waiting in gradio's queue (the whole batch)
         stop_btn.click(stop, queue=False, show_progress="hidden",
                        cancels=[bf.get_config() for bf in gen_fns])
+        # counts clicks instantly (not queued) so the UI can show "+N queued"
+        gen_btn.click(library.job_submitted, queue=False, show_progress="hidden",
+                      trigger_mode="multiple")
 
 
 HEADER = """
@@ -430,7 +523,8 @@ def _add_restore_on_load(demo, render_player):
         state = {"current": entries[0], "queued": None, "history": entries[1:]}
         # prefill the last render's prompt, unless something is already typed
         last = entries[0].get("prompt") or ""
-        prefill = gr.update(value=last) if last and not (prompt or "").strip() else gr.update()
+        prefill = (gr.update(value=last) if last and not (prompt or "").strip()
+                   and "session" not in _prefs() else gr.update())   # a saved session wins
         return (render_player(entries[0]), entries[0].get("timing", ""),
                 up.render_history(state["history"]), state, prefill)
 
@@ -474,9 +568,14 @@ def _add_restore_settings(demo):
     dit_bf.fn = on_dit_change
     mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
 
+    n_out = len(dit_bf.outputs) + 13
+
     def restore(name, cur_dit, cur_sec, cur_steps, prev, mem, vis, *slots):
-        r = library.restore_settings(name)
+        sess = name == SESSION
+        r = _prefs().get("session") if sess else library.restore_settings(name)
         if r is None:
+            if sess:                # nothing saved yet: leave the defaults
+                return tuple(gr.update() for _ in range(n_out))
             raise gr.Error(f"No render named {name!r}")
         keep = gr.update()
         tgt = r["dit"] if r.get("dit") in up.DIT_CHOICES else cur_dit
@@ -518,8 +617,9 @@ def _add_restore_settings(demo):
             str(r["seed"]) if "seed" in r else keep,
             float(r["cfg"]) if "cfg" in r else keep,
             float(r["apg"]) if "apg" in r else keep,
-            keep if a2a_on or "sigma_max" not in r else float(r["sigma_max"]),
-            float(r["sigma_max"]) if a2a_on and "sigma_max" in r else keep,
+            *((r.get("sigma_max", keep), r.get("init_noise_level", keep)) if sess else
+              (keep if a2a_on or "sigma_max" not in r else float(r["sigma_max"]),
+               float(r["sigma_max"]) if a2a_on and "sigma_max" in r else keep)),
             r.get("a2a_audio") if full else keep,
             r.get("inpaint_audio") if full else keep,
             float(rng[0]) if rng else (0 if full else keep),
@@ -527,8 +627,9 @@ def _add_restore_settings(demo):
         ]
         missing = [k for k, on in (("guide audio", a2a_on and full and not r.get("a2a_audio")),
                                    ("inpaint audio", bool(rng) and not r.get("inpaint_audio"))) if on]
-        gr.Info("Settings restored" + ("" if full else " (old render: model, prompt, seed, CFG, length only)")
-                + (f" · missing {', '.join(missing)}" if missing else ""))
+        if not sess:
+            gr.Info("Settings restored" + ("" if full else " (old render: model, prompt, seed, CFG, length only)")
+                    + (f" · missing {', '.join(missing)}" if missing else ""))
         return tuple(out + extra)
 
     with demo:
@@ -543,9 +644,49 @@ def _add_restore_settings(demo):
             ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
         ev.then(None, js=up._JS_FIX_SLIDERS)
 
+        # Session memory: every control (model, prompt, sampling, a2a / inpaint inputs,
+        # LoRA slots) is snapshot into the prefs file on change and put back on page
+        # load, so a server restart (devwatch) or a reload keeps the panel as it was.
+        # `armed` stays False until the load-time restore is done, so the defaults the
+        # fresh page starts with can't overwrite the saved session first.
+        armed = gr.State(False)
+        ev = demo.load(lambda: SESSION, outputs=[name_box], queue=False
+                       ).then(restore, inputs=[name_box] + list(dit_bf.inputs),
+                              outputs=list(dit_bf.outputs) + [dit_dd, prompt, neg, steps, seed, cfg, apg,
+                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e],
+                              queue=False, show_progress="hidden")
+        if vis_bf is not None:
+            ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
+        ev.then(None, js=up._JS_FIX_SLIDERS).then(lambda: True, outputs=[armed], queue=False)
+
+        ctl = [dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
+               a2a, inpaint, inp_s, inp_e]
+        lora_vis, lora_slots = dit_bf.inputs[5], list(gen_bf.inputs[17:32])
+
+        def save(is_armed, dit, dec, prm, ng, sec, stp, sd, cf, ap, sg, inn, a2a_v, inp_v, s0, s1, vis, *sl):
+            if not is_armed:
+                return
+            loras = []
+            for i in range(3):
+                f, dd, strength, lo, hi = sl[5 * i: 5 * i + 5]
+                path = f or (dd if dd and dd != up._DD_NONE else None)
+                if vis and i < len(vis) and vis[i] and path:
+                    loras.append({"path": path, "strength": float(strength), "steps": [int(lo), int(hi)]})
+            _set_pref(session={
+                "dit": dit, "decoder": dec, "prompt": prm or "", "negative_prompt": ng or "",
+                "seed": sd or "", "seconds": sec, "steps": stp, "cfg": cf, "apg": ap,
+                "sigma_max": sg, "init_noise_level": inn, "a2a_audio": a2a_v or None,
+                "inpaint_audio": inp_v or None,
+                "inpaint_range_sec": [s0, s1], "loras": loras, "full": True})
+        gr.on([c.change for c in ctl + [lora_vis] + lora_slots], save,
+              inputs=[armed] + ctl + [lora_vis] + lora_slots, queue=False,
+              show_progress="hidden", trigger_mode="always_last")
+
 
 # ── layout: centred action bar over 40/60 columns ──────────────────────
-PREFS = Path(up.OUTPUT_DIR) / ".studio_prefs.json"
+PREFS = Path(up.OUTPUT_DIR) / ".studio_prefs.json"   # autoplay + the saved control session
+SESSION = "__session__"     # restore() name that means "the saved session", not a render
+_prefs_lock = threading.Lock()
 
 
 def _prefs() -> dict:
@@ -555,9 +696,36 @@ def _prefs() -> dict:
         return {}
 
 
+def _set_pref(**kw) -> None:
+    with _prefs_lock:
+        PREFS.write_text(json.dumps(_prefs() | kw))
+
+
+def _row_player(orig):
+    """The newest clip is the first row of the history list, not a big player above it:
+    same markup as upstream's small=True history row (audio | spectrogram + caption), so
+    studio.js/css treat both alike, but with the main slot's own audio behaviour (autoplay,
+    hotswap, radio, loop, auto-download), which upstream only wires into the big layout."""
+    def render(entry, *, small=False, **kw):
+        html = orig(entry, small=small, **kw)
+        j, i = html.find(">") + 1, html.find("</audio>")   # end of the opening .blk tag / of <audio>
+        if small or i < 0 or not html.endswith("</div>"):
+            return html
+        i += len("</audio>")
+        audio, spec = html[j:i], html[i:-len("</div>")]
+        cap = (f'<div style="font-size:0.8em; margin:2px 0; color:#888">'
+               f'{html_lib.escape(entry["prompt"]) or "<i>(no prompt)</i>"}{up._neg_disp(entry)}'
+               f' · seed {entry["seed"]}{up._meta_suffix(entry)}</div>')
+        return (f'{html[:j]}<div style="display:flex; gap:8px; align-items:center">'
+                f'<div style="flex:1; min-width:0">{audio}</div>'
+                f'<div style="flex:1; min-width:0">{spec}</div></div>{cap}</div>')
+    return render
+
+
 def _layout(demo):
-    """40/60 columns (controls / output); Generate + Stop + the auto-play toggle move out of the
-    output column into a centred bar, on one sticky top line with the header. Blocks are re-parented
+    """40/60 columns (controls / output); Generate + Stop move out of the output column into a
+    centred bar, on one sticky top line with the header (left) and the auto-play toggle (right,
+    next to studio.js's Library button). Blocks are re-parented
     in the tree before launch (gradio builds its layout config at launch)."""
     blocks = list(demo.blocks.values())
     out_col = next(b for b in blocks if isinstance(b, gr.Column) and b.elem_id == "sa3-out")
@@ -565,26 +733,30 @@ def _layout(demo):
     for c in main_row.children:          # 40 / 60: controls left, output right
         if isinstance(c, gr.Column):
             c.scale = 3 if c is out_col else 2
+            if c is not out_col:
+                c.elem_id = "sa3-ctl"    # studio.js splitter resizes #sa3-ctl / #sa3-out
     gen = next(b for b in blocks if isinstance(b, gr.Button) and b.elem_id == "sa3-generate")
     stop = next(b for b in blocks if isinstance(b, gr.Button) and b.elem_id == "sa3-stop")
     opts = next(b for b in blocks if isinstance(b, gr.CheckboxGroup) and b.label == "Playback")
 
     with demo:
         with gr.Row(elem_id="sa3-actions") as bar:
+            pass
+        with gr.Row(elem_id="sa3-right") as right:   # auto-play + (studio.js) the Library button
             autoplay = gr.Checkbox(label="Auto-play when ready", value=True,
                                    elem_id="sa3-autoplay", container=False, scale=0)
 
         # the toggle mirrors "Auto-play" in Playback & files (both ways, user edits only)
         def from_toggle(on, cur):
             cur = [o for o in (cur or []) if o != "Auto-play"] + (["Auto-play"] if on else [])
-            PREFS.write_text(json.dumps(_prefs() | {"autoplay": bool(on)}))
+            _set_pref(autoplay=bool(on))
             return gr.update(value=cur)
         autoplay.input(from_toggle, inputs=[autoplay, opts], outputs=[opts],
                        queue=False, show_progress="hidden")
 
         def from_opts(cur):
             on = "Auto-play" in (cur or [])
-            PREFS.write_text(json.dumps(_prefs() | {"autoplay": on}))
+            _set_pref(autoplay=on)
             return gr.update(value=on)
         opts.input(from_opts, inputs=[opts], outputs=[autoplay], queue=False,
                    show_progress="hidden")
@@ -600,19 +772,35 @@ def _layout(demo):
         b.parent.children.remove(b)
         b.parent = bar
     bar.children[:0] = [gen, stop]
+    # the prompt is what gets edited most: first, full column width; Seed (empty = random)
+    # joins Model / Codec in the row below it
+    prompt = next(b for b in blocks if isinstance(b, gr.Textbox) and b.label == "Prompt")
+    seed = next(b for b in blocks if isinstance(b, gr.Textbox) and b.label == "Seed")
+    model = next(b for b in blocks if isinstance(b, gr.Dropdown) and b.label == "Model")
+    def row_of(b):                      # gradio wraps inputs in a Form inside the Row
+        while not isinstance(b, gr.Row):
+            b = b.parent
+        return b
+    seed.parent.children.remove(seed)
+    model.parent.children.append(seed)  # into the Form that holds Model / Codec
+    seed.parent, seed.scale, seed.min_width = model.parent, 0, 110
+    p_row, m_row = row_of(prompt), row_of(model)
+    col = m_row.parent
+    i, j = col.children.index(m_row), col.children.index(p_row)
+    col.children[i], col.children[j] = p_row, m_row
     # header (logo + title) and the action bar share one sticky top strip
     header = next(b for b in blocks if isinstance(b, gr.HTML) and "sa3-header" in (b.elem_classes or []))
     with demo:
         with gr.Row(elem_id="sa3-top", equal_height=False) as top:
             pass
     root = header.parent
-    for b in (bar, top):
+    for b in (bar, right, top):
         b.parent.children.remove(b)
     root.children.insert(root.children.index(header), top)
     top.parent = root
     root.children.remove(header)
-    top.children[:] = [header, bar]
-    header.parent = bar.parent = top
+    top.children[:] = [header, bar, right]
+    header.parent = bar.parent = right.parent = top
 
 
 def main():
@@ -620,6 +808,9 @@ def main():
     for cls in (gr.Dropdown, gr.Textbox, gr.Slider, gr.Audio, gr.CheckboxGroup, gr.Radio):
         _wrap_init(cls, _relabel)
     _wrap_init(gr.Audio, _audio_drop)
+    for cls in (gr.Slider, gr.File, gr.Dropdown, gr.Button):
+        _wrap_init(cls, _lora_tags)
+    up._lora_dd_choices = _lora_library    # dropdown lists stable-audio-3/loras/**, not loras/<model>/
     _wrap_init(gr.Accordion, _accordion)
     _wrap_init(gr.HTML, _html)
     _wrap_init(gr.Button, _button)
@@ -630,6 +821,7 @@ def main():
     library.init(up)
     library.install_routes()
     _install_stop_hooks()
+    up.render_player = _row_player(up.render_player)   # newest clip = first list row
     orig_render_player = up.render_player   # new entries are persisted in _wire_handlers
     theme = build_theme()
     out_real = str(up.OUTPUT_DIR.resolve())

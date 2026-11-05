@@ -8,17 +8,17 @@ UP   := curl -s -o /dev/null http://127.0.0.1:$(PORT)/
 help: ## List targets
 	@grep -E '^[a-z]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-6s %s\n", $$1, $$2}'
 
-# A running instance (background or another terminal) is stopped and replaced; its
-# open Chrome tab reloads itself onto the new server, so Chrome only opens on a cold start.
+# A running instance (background or another terminal) is stopped and replaced. Once the
+# server answers, scripts/open-ui.sh focuses the open studio tab in Chrome (it reloads
+# itself onto the new server) or opens a new one if there is none.
 start: ## (Re)start SA3 Studio in the foreground (auto-restarts on code edits); Ctrl-C stops it
 	@if $(UP) || pgrep -f "sa3lab/(devwatch|studio)\.py" >/dev/null; then \
 	  echo "SA3 Studio already running on :$(PORT) — restarting it"; \
 	  pkill -f "sa3lab/(devwatch|studio)\.py"; \
 	  for i in $$(seq 1 30); do $(UP) || break; sleep 0.5; done; \
 	  if $(UP); then echo "port $(PORT) is still in use by something else"; exit 1; fi; \
-	else \
-	  ( for i in $$(seq 1 300); do $(UP) && { open -a "Google Chrome" "$(URL)"; exit 0; }; sleep 1; done ) & \
 	fi; \
+	scripts/open-ui.sh $(PORT) "$(URL)" & \
 	exec sa3lab/studio --port $(PORT)
 
 stop: ## Stop a SA3 Studio running in the background
