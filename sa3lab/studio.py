@@ -19,6 +19,8 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
   (0-10 score + free-text tags) that the per-clip label strip saves instantly,
 - serves a live progress estimate (library.py) from past render speeds and
   the sampler's real step count,
+- restores every setting of any past render into the controls with one click
+  (see _add_restore_settings),
 - lays out one sticky top line (logo + a centred Generate / Stop / auto-play
   bar) above 40/60 columns (see _layout),
 - injects a dark theme, CSS, fonts and a small JS layer at `launch()`
@@ -32,6 +34,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -58,7 +61,7 @@ RELABEL = {
     "Decoder (codec)": ("Codec", None),
     "Prompt": ("Prompt", None),
     "Seed (optional)": ("Seed", None),
-    "Seconds": ("Duration (s)", None),
+    "Seconds": ("Length", None),
     "Steps": ("Steps", None),
     "CFG": ("CFG", None),
     "APG (only applies when CFG > 1)": ("APG", "Anti-oversaturation, only when CFG ≠ 1"),
@@ -437,6 +440,110 @@ def _add_restore_on_load(demo, render_player):
                            prompt_box])
 
 
+# ── restore: put every setting of a past render back into the controls ─────
+_RESTORE_PREV = "__sa3_restore__"   # scratch lora-memory key, see restore()
+
+
+def _add_restore_settings(demo):
+    """"Use these settings" on every clip (studio.js calls window.sa3Restore(name)).
+    JS writes the clip's file name into a CSS-hidden textbox via the first step's
+    js, then restore() reads the sidecar (library.restore_settings) and returns
+    updates for every control.
+
+    The model switch is the subtle part: upstream's on_dit_change resets the
+    codec to the model's default, clamps seconds and swaps the LoRA panel from a
+    per-model memory. restore() calls that same function itself, with the
+    restored LoRAs pre-seeded into the memory under the target model, then
+    overrides codec + seconds. Setting the DiT dropdown re-fires on_dit_change
+    from the browser; the wrapper below makes that call a no-op for codec and
+    seconds when the model didn't really change (dit == prev_dit)."""
+    fns = {bf.name: bf for bf in demo.fns.values()}
+    gen_bf, dit_bf, vis_bf = fns["generate"], fns["on_dit_change"], fns.get("_sync_dd_vis")
+    (dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
+     a2a, inpaint, inp_s, inp_e, _opts, _fmt) = gen_bf.inputs[:17]
+    lora_dds = gen_bf.inputs[17:32][1::5]
+    orig_dit = dit_bf.fn
+
+    @functools.wraps(orig_dit)
+    def on_dit_change(dit_name, cur_seconds, cur_steps, prev, *rest):
+        out = list(orig_dit(dit_name, cur_seconds, cur_steps, prev, *rest))
+        if dit_name == prev:        # programmatic re-set (restore), not a real switch
+            out[0] = gr.update()
+            out[1] = gr.update(maximum=up.MAX_SECONDS.get(dit_name, 120))
+        return tuple(out)
+    dit_bf.fn = on_dit_change
+    mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
+
+    def restore(name, cur_dit, cur_sec, cur_steps, prev, mem, vis, *slots):
+        r = library.restore_settings(name)
+        if r is None:
+            raise gr.Error(f"No render named {name!r}")
+        keep = gr.update()
+        tgt = r["dit"] if r.get("dit") in up.DIT_CHOICES else cur_dit
+        n_steps = int(r.get("steps", cur_steps))
+        mem = dict(mem or {})
+        if "loras" in r:            # seed the target model's LoRA memory with this render's adapters
+            valid = {v for _, v in up._lora_dd_choices(tgt)}
+            nslots, nvis = [], []
+            for i in range(3):
+                L = r["loras"][i] if i < len(r["loras"]) else None
+                if L is None:
+                    nslots.append([None, up._DD_NONE, 1.0, 1, n_steps])
+                    nvis.append(False)
+                    continue
+                path = L["path"]
+                dd = path if path in valid else up._DD_NONE
+                f = None if dd != up._DD_NONE else (path if os.path.isfile(path) else None)
+                lo, hi = L.get("steps") or (None, None)
+                nslots.append([f, dd, float(L["strength"]), int(lo or 1), int(hi or n_steps)])
+                nvis.append(True)
+            mem[tgt] = {"vis": nvis, "slots": nslots}
+        else:                       # legacy render: no LoRA record, keep the panel as is
+            mem[tgt] = {"vis": list(vis), "slots": [list(slots[5 * i: 5 * i + 5]) for i in range(3)]}
+        out = list(orig_dit(tgt, cur_sec, n_steps, cur_dit if tgt != cur_dit else _RESTORE_PREV,
+                            mem, vis, *slots))
+        out[mem_idx] = {k: v for k, v in out[mem_idx].items() if k != _RESTORE_PREV}
+        max_s = up.MAX_SECONDS.get(tgt, 120)
+        if r.get("decoder") in up.DECODER_CHOICES:
+            out[0] = gr.update(value=r["decoder"])
+        out[1] = gr.update(maximum=max_s, value=min(float(r.get("seconds", cur_sec)), max_s))
+        a2a_on = r.get("mode") in ("audio-to-audio", "a2a+inpaint")
+        rng = r.get("inpaint_range_sec")
+        full = r["full"]
+        extra = [
+            gr.update(value=tgt),
+            r.get("prompt", keep),
+            r.get("negative_prompt", keep),
+            int(r["steps"]) if "steps" in r else keep,
+            str(r["seed"]) if "seed" in r else keep,
+            float(r["cfg"]) if "cfg" in r else keep,
+            float(r["apg"]) if "apg" in r else keep,
+            keep if a2a_on or "sigma_max" not in r else float(r["sigma_max"]),
+            float(r["sigma_max"]) if a2a_on and "sigma_max" in r else keep,
+            r.get("a2a_audio") if full else keep,
+            r.get("inpaint_audio") if full else keep,
+            float(rng[0]) if rng else (0 if full else keep),
+            float(rng[1]) if rng else (0 if full else keep),
+        ]
+        missing = [k for k, on in (("guide audio", a2a_on and full and not r.get("a2a_audio")),
+                                   ("inpaint audio", bool(rng) and not r.get("inpaint_audio"))) if on]
+        gr.Info("Settings restored" + ("" if full else " (old render: model, prompt, seed, CFG, length only)")
+                + (f" · missing {', '.join(missing)}" if missing else ""))
+        return tuple(out + extra)
+
+    with demo:
+        name_box = gr.Textbox(elem_id="sa3-restore-name", container=False, show_label=False)
+        btn = gr.Button("restore", elem_id="sa3-restore-btn")
+        ev = btn.click(None, js="() => window.__sa3RestoreName || ''", outputs=[name_box], queue=False
+                       ).then(restore, inputs=[name_box] + list(dit_bf.inputs),
+                              outputs=list(dit_bf.outputs) + [dit_dd, prompt, neg, steps, seed, cfg, apg,
+                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e],
+                              queue=False, show_progress="hidden")
+        if vis_bf is not None:
+            ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
+        ev.then(None, js=up._JS_FIX_SLIDERS)
+
+
 # ── layout: centred action bar over 40/60 columns ──────────────────────
 PREFS = Path(up.OUTPUT_DIR) / ".studio_prefs.json"
 
@@ -531,6 +638,7 @@ def main():
     def launch(self, *a, **kw):
         _add_restore_on_load(self, orig_render_player)
         _wire_handlers(self)
+        _add_restore_settings(self)
         _layout(self)
         kw.update(share=False, server_name="127.0.0.1", theme=theme, css=CSS, js=JS)
         kw["allowed_paths"] = list(kw.get("allowed_paths") or []) + [out_real]

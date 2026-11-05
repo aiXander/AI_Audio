@@ -64,7 +64,7 @@
       .concat(sl ? [`${sl[1]} latent frames`] : []).join(" · ");
     host.innerHTML = `
       <div class="sa3-stats">
-        <div class="p" title="${esc(prompt)}">${esc(prompt)}</div>
+        <div class="p" title="${esc(prompt)}">${copyBtn(`data-copy="${esc(prompt)}"`)}${esc(prompt)}</div>
         ${neg.map((n) => `<div class="neg">${esc(n)}</div>`).join("")}
         ${warnHtml}
         <div class="row">
@@ -102,6 +102,7 @@
     enhanceHistory();
     makeDraggable();
     enhanceLabels();
+    mountLibrary();
     progressLoop(anyBusy);
   }
   // ── history rows: tiny transport bar above a full-width spectrogram ──
@@ -111,6 +112,33 @@
   const ICON_DL = '<svg viewBox="0 0 16 16"><path d="M8 2v8m0 0L4.5 6.5M8 10l3.5-3.5M3 13h10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const ICON_GRIP = '<svg viewBox="0 0 16 16"><g fill="currentColor"><circle cx="6" cy="4" r="1.2"/><circle cx="10" cy="4" r="1.2"/><circle cx="6" cy="8" r="1.2"/><circle cx="10" cy="8" r="1.2"/><circle cx="6" cy="12" r="1.2"/><circle cx="10" cy="12" r="1.2"/></g></svg>';
   const clipName = (a) => decodeURIComponent((a.getAttribute("src") || "").split("/").pop() || "clip.wav");
+  const ICON_COPY = '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M10.5 3.5v-.2A1.3 1.3 0 0 0 9.2 2H3.8A1.3 1.3 0 0 0 2.5 3.3v5.4A1.3 1.3 0 0 0 3.8 10h.2" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>';
+  const ICON_OK = '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const ICON_RESTORE = '<svg viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.5 2.2v3h3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/></svg>';
+  const ICON_FILTER = '<svg viewBox="0 0 16 16"><path d="M2 4h12M4.5 8h7M7 12h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  const copyBtn = (attrs) => `<button class="sa3-cp" ${attrs} title="Copy prompt">${ICON_COPY}</button>`;
+
+  // one delegated handler for every copy icon: data-copy holds the text, or
+  // data-name points at a render whose full prompt comes from its sidecar
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest(".sa3-cp");
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    let text = b.dataset.copy;
+    if (text === undefined && b.dataset.name) text = ((await getLabel(b.dataset.name)) || labels.get(b.dataset.name) || {}).prompt;
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); } catch (err) { console.warn("[sa3] copy failed", err); return; }
+    b.innerHTML = ICON_OK; b.classList.add("ok");
+    setTimeout(() => { b.innerHTML = ICON_COPY; b.classList.remove("ok"); }, 1100);
+  }, true);
+
+  // "use these settings": studio.py's restore handler reads the name from here
+  window.sa3Restore = (name) => {
+    const b = document.getElementById("sa3-restore-btn");
+    if (!b || !name) return;
+    window.__sa3RestoreName = name;
+    b.click();
+  };
 
   function enhanceHistory() {
     document.querySelectorAll("#sa3-hist .blk audio:not([data-sa3])").forEach((a) => {
@@ -126,6 +154,13 @@
         <a class="dl" title="Download" href="${a.getAttribute("src")}" download="${esc(clipName(a))}">${ICON_DL}</a>
         <span class="grip" title="Drag onto an audio input">${ICON_GRIP}</span>`;
       row.insertBefore(bar, row.firstChild);
+      const cap = row.nextElementSibling;
+      if (cap && cap.tagName === "DIV" && !cap.classList.contains("sa3-lab")) {
+        cap.classList.add("sa3-cap");
+        const tn = cap.firstChild;
+        if (tn && tn.nodeType === 3) tn.textContent = tn.textContent.replace(/^\s*\d+[smhd] ago\s*·\s*/, "");
+        cap.insertAdjacentHTML("afterbegin", copyBtn(`data-name="${esc(clipName(a))}"`));
+      }
       const pp = bar.querySelector(".pp"), tm = bar.querySelector(".tm");
       const sync = () => {
         pp.innerHTML = a.paused ? ICON_PLAY : ICON_PAUSE;
@@ -277,7 +312,8 @@
       el.innerHTML = `<div class="sc" title="Score 0-10 (click the lit one again to clear)">${
         [...Array(11).keys()].map((v) => `<button data-v="${v}">${v}</button>`).join("")}</div>
         <div class="tags"></div>
-        <input class="add" placeholder="+ tag" maxlength="60" spellcheck="false">`;
+        <input class="add" placeholder="+ tag" maxlength="60" spellcheck="false">
+        <button class="rs" title="Restore every setting that made this render (model, prompt, seed, length, steps, CFG, LoRAs, inputs)">${ICON_RESTORE}<span>settings</span></button>`;
       el.addEventListener("dragstart", (e) => { e.preventDefault(); e.stopPropagation(); });
       el.addEventListener("mousedown", (e) => e.stopPropagation());
       el.addEventListener("click", (e) => {
@@ -285,6 +321,7 @@
         const d = labels.get(name) || { score: null, tags: [] };
         const sb = e.target.closest(".sc button");
         if (sb) { const v = Number(sb.dataset.v); saveLabel(name, { score: d.score === v ? null : v }); return; }
+        if (e.target.closest(".rs")) { window.sa3Restore(name); return; }
         const tb = e.target.closest(".tag button");
         if (tb) { const t = [...(d.tags || [])]; t.splice(Number(tb.dataset.i), 1); saveLabel(name, { tags: t }); }
       });
@@ -304,6 +341,237 @@
       getLabel(name).then(() => paintLabel(el));
       paintLabel(el);
     });
+  }
+
+  // ── auto-reload: devwatch.py restarts the server on code changes; reload the
+  //    page once the new server answers, carrying the unsent prompt over ──
+  (function bootWatch() {
+    let boot = null;
+    const promptBox = () => {
+      const blk = [...document.querySelectorAll(".block")].find((b) => {
+        const l = b.querySelector("[data-testid='block-info']");
+        return l && l.textContent.trim() === "Prompt";
+      });
+      return blk && blk.querySelector("textarea");
+    };
+    const KEEP = "sa3-reload-prompt";
+    const kept = sessionStorage.getItem(KEEP);
+    if (kept !== null) {
+      sessionStorage.removeItem(KEEP);
+      const put = (n) => {
+        const t = promptBox();
+        if (!t) { if (n < 40) setTimeout(() => put(n + 1), 250); return; }
+        setTimeout(() => { t.value = kept; t.dispatchEvent(new Event("input", { bubbles: true })); }, 800);  // after gradio's own load-time prefill
+      };
+      put(0);
+    }
+    setInterval(async () => {
+      try {
+        const r = await fetch("sa3/boot", { cache: "no-store" });
+        if (!r.ok) return;
+        const id = (await r.json()).id;
+        if (boot === null) boot = id;
+        else if (id !== boot) {
+          const t = promptBox();
+          if (t) sessionStorage.setItem(KEEP, t.value);
+          location.reload();
+        }
+      } catch (e) { /* server restarting */ }
+    }, 1500);
+  })();
+
+  // ── Library: top-right button → modal that browses + filters every render ──
+  // Rows come from GET /sa3/library (library.py): prompt, model, seed, score,
+  // tags, measured BPM. Filters persist in localStorage.
+  const LIB_KEY = "sa3-lib-filters";
+  const LIB_DEF = { q: "", bmin: "", bmax: "", tiers: [], smin: 0, smax: 10, unscored: true, tags: [], dits: [], sort: "new" };
+  const TIERS = [["green", "on tempo"], ["yellow", "close"], ["orange", "off"], ["none", "no BPM asked"], ["nobeat", "no beat"]];
+  let LF = { ...LIB_DEF };
+  try { LF = { ...LIB_DEF, ...JSON.parse(localStorage.getItem(LIB_KEY) || "{}") }; } catch (e) { /* keep defaults */ }
+  let libRows = [], libEl = null, libTimer = null, libPlaying = null;
+  const libPlayer = new Audio();
+  const libActive = () => Object.keys(LIB_DEF).filter((k) => k !== "sort" && JSON.stringify(LF[k]) !== JSON.stringify(LIB_DEF[k])).length;
+
+  function mountLibrary() {
+    const top = document.getElementById("sa3-top");
+    if (!top || document.getElementById("sa3-libbtn")) return;
+    const btn = document.createElement("button");
+    btn.id = "sa3-libbtn";
+    btn.title = "Browse and filter every render (L)";
+    btn.innerHTML = `${ICON_FILTER}<span>Library</span><b></b>`;
+    btn.addEventListener("click", () => toggleLibrary());
+    top.appendChild(btn);
+    paintLibBadge();
+  }
+  function paintLibBadge() {
+    const b = document.querySelector("#sa3-libbtn b");
+    if (b) { const n = libActive(); b.textContent = n || ""; b.style.display = n ? "" : "none"; }
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && libEl && libEl.classList.contains("open")) { toggleLibrary(false); return; }
+    if (e.key === "l" && !e.metaKey && !e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) toggleLibrary();
+  });
+
+  function buildLibrary() {
+    libEl = document.createElement("div");
+    libEl.id = "sa3-lib";
+    libEl.innerHTML = `
+      <div class="pane" role="dialog" aria-label="Render library">
+        <header>
+          <h3>Library</h3><span class="cnt"></span><span class="sp"></span>
+          <label class="srt">sort <select class="sort">
+            <option value="new">newest</option><option value="score">score</option>
+            <option value="bpm">BPM</option><option value="old">oldest</option></select></label>
+          <button class="x" title="Close (Esc)">×</button>
+        </header>
+        <div class="body">
+          <aside>
+            <div class="f"><span class="h">Prompt contains</span><input class="q" type="search" placeholder="sitar techno…" spellcheck="false"></div>
+            <div class="f"><span class="h">Measured BPM</span>
+              <div class="rng"><input class="bmin" type="number" min="0" max="300" placeholder="min"><i>–</i><input class="bmax" type="number" min="0" max="300" placeholder="max"></div></div>
+            <div class="f"><span class="h">BPM vs prompt</span><div class="chips tiers"></div></div>
+            <div class="f"><span class="h">Score</span>
+              <div class="rng"><input class="smin" type="number" min="0" max="10"><i>–</i><input class="smax" type="number" min="0" max="10"></div>
+              <label class="ck"><input type="checkbox" class="unscored"> include unscored</label></div>
+            <div class="f"><span class="h">Tags <em>all must match</em></span><div class="chips tagc"></div></div>
+            <div class="f"><span class="h">Model</span><div class="chips ditc"></div></div>
+            <button class="reset">Reset filters</button>
+          </aside>
+          <div class="list"></div>
+        </div>
+      </div>`;
+    libEl.appendChild(libPlayer);               // in the DOM, so the background visualiser hears it
+    document.body.appendChild(libEl);
+    const $ = (s) => libEl.querySelector(s);
+    libEl.addEventListener("mousedown", (e) => { if (e.target === libEl) toggleLibrary(false); });
+    $(".x").addEventListener("click", () => toggleLibrary(false));
+    const set = (patch) => { LF = { ...LF, ...patch }; localStorage.setItem(LIB_KEY, JSON.stringify(LF)); renderLibrary(); paintLibBadge(); };
+    $(".q").addEventListener("input", (e) => set({ q: e.target.value }));
+    for (const k of ["bmin", "bmax"]) $("." + k).addEventListener("input", (e) => set({ [k]: e.target.value }));
+    for (const k of ["smin", "smax"]) $("." + k).addEventListener("input", (e) => set({ [k]: e.target.value === "" ? LIB_DEF[k] : Number(e.target.value) }));
+    $(".unscored").addEventListener("change", (e) => set({ unscored: e.target.checked }));
+    $(".sort").addEventListener("change", (e) => set({ sort: e.target.value }));
+    $(".reset").addEventListener("click", () => { set({ ...LIB_DEF, sort: LF.sort }); syncLibInputs(); });
+    const toggleIn = (key, v) => set({ [key]: LF[key].includes(v) ? LF[key].filter((x) => x !== v) : [...LF[key], v] });
+    libEl.addEventListener("click", (e) => {
+      const c = e.target.closest("[data-chip]");
+      if (c) { toggleIn(c.dataset.chip, c.dataset.v); return; }
+      const r = e.target.closest(".r");
+      if (!r) return;
+      const name = r.dataset.name;
+      if (e.target.closest(".pp")) {
+        if (libPlaying === name && !libPlayer.paused) libPlayer.pause();
+        else {
+          document.querySelectorAll("audio").forEach((a) => { if (a !== libPlayer) a.pause(); });
+          if (libPlaying !== name) { libPlayer.src = "sa3/audio?name=" + encodeURIComponent(name); libPlaying = name; }
+          libPlayer.play();
+        }
+      } else if (e.target.closest(".rs")) { window.sa3Restore(name); toggleLibrary(false); }
+      else if (e.target.closest(".spec")) {          // click the spectrogram to seek
+        const im = e.target.closest(".spec"), f = (e.clientX - im.getBoundingClientRect().left) / im.clientWidth;
+        if (libPlaying !== name) { libPlayer.src = "sa3/audio?name=" + encodeURIComponent(name); libPlaying = name; }
+        const go = () => { libPlayer.currentTime = f * (libPlayer.duration || 0); libPlayer.play(); };
+        libPlayer.readyState >= 1 ? go() : libPlayer.addEventListener("loadedmetadata", go, { once: true });
+      }
+    });
+    ["play", "pause", "ended", "timeupdate"].forEach((ev) => libPlayer.addEventListener(ev, paintLibPlayback));
+    syncLibInputs();
+  }
+  function syncLibInputs() {
+    const $ = (s) => libEl.querySelector(s);
+    $(".q").value = LF.q; $(".bmin").value = LF.bmin; $(".bmax").value = LF.bmax;
+    $(".smin").value = LF.smin; $(".smax").value = LF.smax; $(".unscored").checked = LF.unscored; $(".sort").value = LF.sort;
+  }
+  function paintLibPlayback() {
+    if (!libEl) return;
+    libEl.querySelectorAll(".r").forEach((r) => {
+      const on = r.dataset.name === libPlaying && !libPlayer.paused;
+      r.classList.toggle("on", on);
+      r.querySelector(".pp").innerHTML = on ? ICON_PAUSE : ICON_PLAY;
+      const ph = r.querySelector(".ph");
+      if (ph) ph.style.left = r.dataset.name === libPlaying && libPlayer.duration ? (100 * libPlayer.currentTime / libPlayer.duration) + "%" : "-4px";
+    });
+  }
+  async function fetchLibrary() {
+    try {
+      const r = await fetch("sa3/library");
+      if (r.ok) libRows = await r.json();
+    } catch (e) { console.warn("[sa3] library fetch failed", e); }
+    renderLibrary();
+    clearTimeout(libTimer);                     // BPM still being measured: refresh shortly
+    if (libEl.classList.contains("open") && libRows.some((x) => x.bpm && x.bpm.pending)) libTimer = setTimeout(fetchLibrary, 2500);
+  }
+  function toggleLibrary(want) {
+    if (!libEl) buildLibrary();
+    const open = want === undefined ? !libEl.classList.contains("open") : want;
+    libEl.classList.toggle("open", open);
+    document.getElementById("sa3-libbtn")?.classList.toggle("on", open);
+    if (open) { fetchLibrary(); setTimeout(() => libEl.querySelector(".q").focus({ preventScroll: true }), 60); }
+    else { clearTimeout(libTimer); libPlayer.pause(); }
+  }
+  function libFilter(r) {
+    const words = LF.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const pr = (r.prompt || "").toLowerCase();
+    if (words.some((w) => !pr.includes(w))) return false;
+    const b = r.bpm || {};
+    const hasBpm = b.bpm !== undefined && b.tier !== "nobeat" && !b.pending;
+    if ((LF.bmin !== "" || LF.bmax !== "") && !hasBpm) return false;
+    if (LF.bmin !== "" && b.bpm < Number(LF.bmin)) return false;
+    if (LF.bmax !== "" && b.bpm > Number(LF.bmax)) return false;
+    if (LF.tiers.length && !LF.tiers.includes(b.tier)) return false;
+    if (r.score === null || r.score === undefined) { if (!LF.unscored) return false; }
+    else if (r.score < LF.smin || r.score > LF.smax) return false;
+    const tg = new Set((r.tags || []).map((t) => t.toLowerCase()));
+    if (LF.tags.some((t) => !tg.has(t.toLowerCase()))) return false;
+    if (LF.dits.length && !LF.dits.includes(r.dit)) return false;
+    return true;
+  }
+  const libAgo = (ts) => {
+    const d = Date.now() / 1000 - ts;
+    if (d < 3600) return Math.max(1, Math.round(d / 60)) + "m ago";
+    if (d < 86400) return Math.round(d / 3600) + "h ago";
+    return new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  };
+  function renderLibrary() {
+    if (!libEl) return;
+    const $ = (s) => libEl.querySelector(s);
+    const chip = (key, v, label, n, extra = "") =>
+      `<button data-chip="${key}" data-v="${esc(v)}" class="${LF[key].includes(v) ? "on" : ""} ${extra}">${esc(label)}${n !== undefined ? `<i>${n}</i>` : ""}</button>`;
+    const count = (f) => libRows.reduce((m, r) => { for (const k of f(r)) m.set(k, (m.get(k) || 0) + 1); return m; }, new Map());
+    const tierN = count((r) => [r.bpm && r.bpm.tier].filter(Boolean));
+    $(".tiers").innerHTML = TIERS.map(([t, l]) => chip("tiers", t, l, tierN.get(t) || 0, "t-" + t)).join("");
+    const tagN = count((r) => r.tags || []);
+    const tags = [...new Set([...tagN.keys(), ...LF.tags])].sort((a, b) => (tagN.get(b) || 0) - (tagN.get(a) || 0) || a.localeCompare(b));
+    $(".tagc").innerHTML = tags.length ? tags.map((t) => chip("tags", t, t, tagN.get(t) || 0)).join("") : '<span class="none">no tags yet</span>';
+    const ditN = count((r) => [r.dit].filter(Boolean));
+    $(".ditc").innerHTML = [...ditN.keys()].sort().map((d) => chip("dits", d, d, ditN.get(d))).join("");
+    let rows = libRows.filter(libFilter);
+    const sc = (r) => (r.score === null || r.score === undefined ? -1 : r.score);
+    const bp = (r) => (r.bpm && r.bpm.bpm && r.bpm.tier !== "nobeat" ? r.bpm.bpm : 1e9);
+    if (LF.sort === "score") rows.sort((a, b) => sc(b) - sc(a) || b.ts - a.ts);
+    else if (LF.sort === "bpm") rows.sort((a, b) => bp(a) - bp(b) || b.ts - a.ts);
+    else if (LF.sort === "old") rows.sort((a, b) => a.ts - b.ts);
+    $(".cnt").textContent = `${rows.length} of ${libRows.length}`;
+    const shown = rows.slice(0, 200);
+    $(".list").innerHTML = shown.length ? shown.map((r) => `
+      <div class="r" data-name="${esc(r.name)}">
+        <button class="pp" title="Play / pause">${ICON_PLAY}</button>
+        <div class="mid">
+          ${r.has_spec ? `<div class="spec"><img loading="lazy" src="sa3/spec?name=${encodeURIComponent(r.name)}" alt=""><span class="ph"></span></div>` : ""}
+          <div class="pr">${copyBtn(`data-copy="${esc(r.prompt)}"`)}<span title="${esc(r.prompt)}">${esc(r.prompt || "(no prompt)")}</span></div>
+          <div class="meta">
+            <span class="k">${libAgo(r.ts)}</span><span class="k">${esc(r.dit || "?")}</span>
+            <span class="k">seed ${esc(String(r.seed ?? "?"))}</span>${r.seconds ? `<span class="k">${Math.round(r.seconds)} s</span>` : ""}
+            ${r.steps ? `<span class="k">${r.steps} st</span>` : ""}${r.cfg !== undefined && r.cfg !== null ? `<span class="k">cfg ${r.cfg}</span>` : ""}
+            ${r.mode && r.mode !== "text-to-audio" ? `<span class="k">${esc(r.mode)}</span>` : ""}${r.lora ? '<span class="k">LoRA</span>' : ""}
+          </div>
+          <div class="sa3-lab lib">${r.score !== null && r.score !== undefined ? `<span class="scb">${r.score}<i>/10</i></span>` : ""}${bpmChip(r.bpm)}${(r.tags || []).map((t) =>
+            `<span class="tag" data-chip="tags" data-v="${esc(t)}" title="Filter on this tag">${esc(t)}</span>`).join("")}</div>
+        </div>
+        <button class="rs" title="Restore every setting that made this render">${ICON_RESTORE}<span>settings</span></button>
+      </div>`).join("") + (rows.length > shown.length ? `<div class="more">+ ${rows.length - shown.length} more: narrow the filters</div>` : "")
+      : `<div class="empty">${libRows.length ? "Nothing matches these filters." : "No renders yet."}</div>`;
+    paintLibPlayback();
   }
 
   // ── progress: best-effort ETA from past render speeds (GET /sa3/progress) ──
@@ -425,10 +693,10 @@
       const out = new Float32Array(H);
       for (let y = 0; y < H; y++) {
         const f = rowF[y], lf = Math.log2(f);
-        let v = 0.05 * Math.random();                                          // noise floor
-        for (let k = 0; k < chord.length; k++) v += (0.42 / (1 + k * 0.35)) * swell * gauss(lf - Math.log2(root * chord[k]), 0.018);
-        v += 0.75 * kick * gauss(lf - Math.log2(50 + 60 * ph), 0.35);          // kick: pitch-dropping thump
-        if (f > 5000) v += 0.32 * hat * Math.random();                          // hats: bright noise ticks
+        let v = 0.09 * Math.random() * (0.6 + 0.4 * Math.sin(lf * 3 + t * 0.3));                                          // noise floor
+        for (let k = 0; k < chord.length; k++) v += (0.6 / (1 + k * 0.3)) * swell * gauss(lf - Math.log2(root * chord[k]), 0.03);
+        v += 0.95 * kick * gauss(lf - Math.log2(50 + 60 * ph), 0.45);          // kick: pitch-dropping thump
+        if (f > 4000) v += 0.55 * hat * Math.random();                          // hats: bright noise ticks
         out[y] = v;
       }
       return out;
@@ -459,9 +727,9 @@
         const bin = ctx.sampleRate / an.fftSize;
         vals = rowF.map((f) => { const x = f / bin, i = Math.min(buf.length - 2, x | 0), fr = x - i; return Math.pow((buf[i] * (1 - fr) + buf[i + 1] * fr) / 255, 1.8) * 1.15; });
       } else vals = idleCol(t);
-      const gain = playing ? 0.62 : 0.4;
+      const gain = playing ? 0.8 : 0.6;
       for (let y = 0; y < H; y++) {
-        const li = Math.min(255, Math.max(0, vals[y] * gain * 255)) | 0, p = y * 4;
+        const li = Math.min(255, Math.max(0, Math.pow(Math.max(0, vals[y] * gain), 0.65) * 255)) | 0, p = y * 4;
         col.data[p] = LUT[li * 3]; col.data[p + 1] = LUT[li * 3 + 1]; col.data[p + 2] = LUT[li * 3 + 2]; col.data[p + 3] = 255;
       }
       wg.putImageData(col, W - 1, 0);
@@ -502,7 +770,7 @@
         else v = 0.6 * Math.sin(x * 0.05 + t * 2.1) * Math.sin(x * 0.007 - t * 0.4) + 0.25 * Math.sin(x * 0.31 + t * 9);
         x ? g.lineTo(x, y0 + v * amp) : g.moveTo(x, y0 + v * amp);
       }
-      g.strokeStyle = `rgba(79,209,197,${(playing ? 0.22 + 0.4 * env.mid : 0.12).toFixed(3)})`;
+      g.strokeStyle = `rgba(79,209,197,${(playing ? 0.3 + 0.45 * env.mid : 0.22).toFixed(3)})`;
       g.lineWidth = 1; g.stroke();
       g.globalCompositeOperation = "source-over";
     }

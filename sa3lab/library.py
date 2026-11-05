@@ -20,9 +20,12 @@ entry fields (prompt, seed, dit, cfg, sigma); their label still works.
 This module also serves the browser side, as plain routes added to gradio's
 FastAPI app (so a score click never waits behind a running render in the queue):
 
-    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm"}  (bpm may be {"pending"})
+    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm", "prompt"}  (bpm may be {"pending"})
     POST /sa3/label  {name, score?, tags?}   writes the sidecar's "label" at once
     GET  /sa3/progress              → live progress of the running render
+    GET  /sa3/boot                  → server boot id (the page reloads when it changes)
+    GET  /sa3/library               → every render as a filterable row (Library modal)
+    GET  /sa3/spec?name=  /sa3/audio?name=   its spectrogram jpeg / audio file
 
 and the progress estimate: a render's expected duration is predicted from past
 renders' measured timings (sampling cost per step × latent frame, doubled with
@@ -46,12 +49,13 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import Request  # module level: route annotations are resolved from globals
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 AUDIO_EXT = {".mp3", ".wav"}
 _lock = threading.Lock()
 OUT_DIR: Path | None = None        # set by init()
 _up = None                         # upstream sa3_gradio module
+BOOT_ID = f"{os.getpid()}-{time.time():.0f}"   # changes on every server (re)start
 
 
 def init(up) -> None:
@@ -85,7 +89,44 @@ def read_label(name: str) -> dict | None:
         d = {}
     lab = d.get("label") or {}
     return {"score": lab.get("score"), "tags": lab.get("tags") or [],
-            "has_gen": "gen" in d, "bpm": _tempo_of(p, d)}
+            "has_gen": "gen" in d, "bpm": _tempo_of(p, d),
+            "prompt": (d.get("gen") or {}).get("prompt", d.get("prompt"))}
+
+
+def restore_settings(name: str) -> dict | None:
+    """The UI settings that produced a render, for the studio's "use these
+    settings" button. From the "gen" block when present; renders made before it
+    existed only carry model, prompt, negative prompt, seed, CFG and sigma_max
+    (plus the clip length, read from the audio), so steps / LoRAs / APG are
+    left as they are for those (keys absent)."""
+    p = _audio_path(name)
+    if p is None:
+        return None
+    try:
+        d = json.loads(_sidecar(p).read_text())
+    except Exception:
+        d = {}
+    g = d.get("gen")
+    if g:
+        def inp(x):
+            rel = (x or {}).get("archived")
+            return str(OUT_DIR / rel) if rel and (OUT_DIR / rel).is_file() else None
+        return {k: g[k] for k in ("dit", "decoder", "prompt", "negative_prompt", "seed", "seconds",
+                                  "steps", "cfg", "apg", "sigma_max", "mode", "inpaint_range_sec")
+                if k in g} | {"loras": g.get("loras") or [], "a2a_audio": inp(g.get("a2a_audio")),
+                             "inpaint_audio": inp(g.get("inpaint_audio")), "full": True}
+    out = {"full": False}
+    for src, dst in (("dit", "dit"), ("prompt", "prompt"), ("neg", "negative_prompt"), ("seed", "seed"),
+                     ("cfg", "cfg"), ("smx", "sigma_max"), ("mode", "mode")):
+        if d.get(src) is not None:
+            out[dst] = d[src]
+    try:
+        dur = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                              "csv=p=0", str(p)], capture_output=True, text=True, timeout=10).stdout
+        out["seconds"] = round(float(dur))
+    except Exception:
+        pass
+    return out
 
 
 # ── auto BPM tag: measured tempo vs the prompt's (tempo.py) ────────────────
@@ -391,6 +432,57 @@ def progress() -> dict:
             "step": _prog.get("step", 0), "steps": _prog.get("steps"), "history_n": est["n"]}
 
 
+# ── library browser: every render as one filterable row (the studio's Library modal) ──
+_rows: dict[str, tuple[float, dict]] = {}     # name -> (sidecar mtime, row)
+
+
+def library_rows() -> list[dict]:
+    """All renders in OUT_DIR, newest first: the fields the Library modal filters
+    and shows. Cached per sidecar mtime (sidecars carry a ~400 KB spectrogram)."""
+    rows = []
+    for p in OUT_DIR.iterdir():
+        if p.suffix.lower() not in AUDIO_EXT or not p.is_file():
+            continue
+        sc = _sidecar(p)
+        try:
+            mt = sc.stat().st_mtime
+        except OSError:
+            mt = -1.0
+        hit = _rows.get(p.name)
+        if hit and hit[0] == mt:
+            rows.append(hit[1])
+            continue
+        try:
+            d = json.loads(sc.read_text())
+        except Exception:
+            d = {}
+        g, lab = d.get("gen") or {}, d.get("label") or {}
+        row = {"name": p.name, "ts": d.get("ts") or p.stat().st_mtime,
+               "prompt": g.get("prompt", d.get("prompt")) or "",
+               "dit": g.get("dit", d.get("dit")), "seed": g.get("seed", d.get("seed")),
+               "seconds": g.get("seconds"), "steps": g.get("steps"), "cfg": g.get("cfg", d.get("cfg")),
+               "mode": g.get("mode", d.get("mode")), "lora": bool(g.get("loras") or d.get("lora")),
+               "score": lab.get("score"), "tags": lab.get("tags") or [],
+               "has_spec": bool(d.get("spec_b64")), "bpm": _tempo_of(p, d)}
+        if not row["bpm"].get("pending"):
+            _rows[p.name] = (mt, row)
+        rows.append(row)
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    return rows
+
+
+def spec_jpeg(name: str) -> bytes | None:
+    p = _audio_path(name)
+    if p is None:
+        return None
+    try:
+        import base64
+        b = json.loads(_sidecar(p).read_text()).get("spec_b64")
+        return base64.b64decode(b) if b else None
+    except Exception:
+        return None
+
+
 # ── routes ─────────────────────────────────────────────────────────────────
 def install_routes() -> None:
     """Add /sa3/* routes to every gradio app gradio builds (ahead of its catch-alls)."""
@@ -415,6 +507,21 @@ def install_routes() -> None:
     async def progress_get():
         return JSONResponse(progress())
 
+    async def boot_get():            # studio.js reloads the page when this changes
+        return JSONResponse({"id": BOOT_ID})
+
+    def library_get():               # sync: runs in the threadpool (disk reads)
+        return JSONResponse(library_rows())
+
+    def spec_get(name: str):
+        b = spec_jpeg(name)
+        return (Response(b, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+                if b else JSONResponse({"error": "no spectrogram"}, status_code=404))
+
+    def audio_get(name: str):
+        p = _audio_path(name)
+        return FileResponse(p) if p else JSONResponse({"error": "unknown file"}, status_code=404)
+
     orig = routes.App.create_app
 
     def create_app(*a, **kw):
@@ -422,6 +529,10 @@ def install_routes() -> None:
         app.add_api_route("/sa3/label", label_get, methods=["GET"])
         app.add_api_route("/sa3/label", label_post, methods=["POST"])
         app.add_api_route("/sa3/progress", progress_get, methods=["GET"])
+        app.add_api_route("/sa3/library", library_get, methods=["GET"])
+        app.add_api_route("/sa3/boot", boot_get, methods=["GET"])
+        app.add_api_route("/sa3/spec", spec_get, methods=["GET"])
+        app.add_api_route("/sa3/audio", audio_get, methods=["GET"])
         ours = [r for r in app.router.routes if getattr(r, "path", "").startswith("/sa3/")]
         app.router.routes[:] = ours + [r for r in app.router.routes if r not in ours]
         return app

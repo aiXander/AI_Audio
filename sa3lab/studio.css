@@ -3,16 +3,17 @@
 body { background: #09090d !important; }
 /* animated, sound-reactive glitch-spectrogram background (studio.js draws it at 1/3 res;
    upscaled pixelated so it reads as chunky data, with CRT scanlines over it) */
-#sa3-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; image-rendering: pixelated; opacity: .9; }
+#sa3-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; image-rendering: pixelated; opacity: .75; }
 body::before { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px); }
 body::after { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(5,5,8,0.55) 100%); }
+  /* dark veil over the content area (the gaps between boxes stay calm), vivid only at the far edges */
+  background: radial-gradient(75% 85% at 50% 50%, rgba(9,9,13,0.55) 0%, rgba(9,9,13,0.38) 65%, rgba(5,5,8,0.5) 100%); }
 gradio-app { position: relative; z-index: 1; background: transparent !important; }
 gradio-app, .gradio-container, .gradio-container > .main, .gradio-container .contain, .app { background: transparent !important; }
 /* panels go slightly glassy so the light reads through */
-.block, .form, .sa3-stats, .sa3-player .blk { backdrop-filter: blur(14px); }
-.block:not(.sa3-player):not(.sa3-timing):not(.sa3-error):not(.sa3-queued):not(.sa3-history):not(.sa3-header):not(.sa3-footer):not(.sa3-sec-wrap) { background: rgba(17,17,23,0.72) !important; }
+.block, .form, .sa3-stats, .sa3-player .blk { backdrop-filter: blur(26px) saturate(0.7); }
+.block:not(.sa3-player):not(.sa3-timing):not(.sa3-error):not(.sa3-queued):not(.sa3-history):not(.sa3-header):not(.sa3-footer):not(.sa3-sec-wrap) { background: rgba(17,17,23,0.86) !important; }
 .gradio-container { width: 100% !important; max-width: 1440px !important; margin: 0 auto !important; padding: 0 36px 40px !important; }
 .gradio-container > .main { max-width: none !important; width: 100% !important; padding: 0 !important; }
 footer { display: none !important; }
@@ -33,6 +34,7 @@ textarea:focus, input[type=text]:focus, input[type=number]:focus { box-shadow: 0
 textarea { font-size: 15px !important; line-height: 1.5 !important; }
 input[type=number] { font-family: "JetBrains Mono", ui-monospace, monospace !important; font-size: 13px !important; }
 [data-testid="block-info"], .block-info { letter-spacing: 0.01em; }
+.gradio-container .head [data-testid="block-info"] { white-space: nowrap; }
 
 /* accordions → quiet cards */
 .label-wrap { font-weight: 600 !important; font-size: 14px !important; color: #d6d6e2 !important; }
@@ -54,7 +56,7 @@ input[type=number] { font-family: "JetBrains Mono", ui-monospace, monospace !imp
 .gradio-container .slider_input_container { gap: 8px !important; }
 .gradio-container .min_value, .gradio-container .max_value { font: 500 10.5px "JetBrains Mono", ui-monospace, monospace !important; color: #5f5f70 !important; margin: 0 !important; }
 .gradio-container .tab-like-container { border-color: rgba(255,255,255,0.07) !important; border-radius: 7px !important; overflow: hidden; }
-.gradio-container .tab-like-container input[type=number] { height: 24px !important; min-width: 44px !important; width: 52px; padding: 0 6px !important;
+.gradio-container .tab-like-container input[type=number] { height: 24px !important; min-width: 38px !important; width: 46px; padding: 0 5px !important;
   border: none !important; border-radius: 0 !important; background: rgba(0,0,0,0.25) !important; font-size: 12px !important; color: #e3e3ee !important; }
 .gradio-container .tab-like-container .reset-button { min-width: 22px !important; padding: 0 5px !important; color: #6f6f80 !important; font-size: 11px !important;
   border-left-color: rgba(255,255,255,0.07) !important; }
@@ -139,7 +141,7 @@ audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 99
 
 /* stats readout (built by studio.js from upstream's timing line): two compact lines */
 .sa3-stats { background: rgba(13,13,18,0.7); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 9px 12px; }
-.sa3-stats .p { font-size: 13px; color: #e3e3ee; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa3-stats .p { display: block; font-size: 13px; color: #e3e3ee; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa3-stats .neg { font-size: 12px; color: #8b8b9c; margin-top: 2px; }
 .sa3-stats .warn { font-size: 12px; color: #ffb35c; margin-top: 3px; }
 .sa3-stats .row { display: flex; align-items: center; gap: 14px; margin-top: 6px; }
@@ -265,3 +267,103 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
 .sa3-player > .wrap .progress-text, .sa3-player > .wrap .meta-text, .sa3-player > .wrap .meta-text-center,
 .sa3-player > .wrap .eta-bar { display: none !important; }
 .sa3-player:not(.is-busy) > .wrap::before { display: none !important; }
+
+/* ── copy-prompt icon (studio.js, one delegated handler) ─────────── */
+.sa3-cp { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; margin: 0 6px 0 0; vertical-align: -3px;
+  border: 0; border-radius: 5px; background: transparent; color: #5f5f70; cursor: pointer; transition: color .12s, background .12s; flex: none; }
+.sa3-cp svg { width: 12px; height: 12px; display: block; }
+.sa3-cp:hover { color: #e9e9f1; background: rgba(255,255,255,0.07); }
+.sa3-cp.ok { color: #7ee2a8; }
+#sa3-hist .sa3-cap .sa3-cp { width: 16px; height: 16px; margin-right: 4px; }
+
+/* ── restore-settings button at the end of every clip's label strip ── */
+.sa3-lab .rs, #sa3-lib .r .rs { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.03); color: #8b8b9c;
+  font-size: 11.5px; cursor: pointer; white-space: nowrap; transition: color .12s, border-color .12s, background .12s; }
+.sa3-lab .rs svg, #sa3-lib .r .rs svg { width: 12px; height: 12px; }
+.sa3-lab .rs:hover, #sa3-lib .r .rs:hover { color: #e6e1ff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.12); }
+#sa3-restore-name, #sa3-restore-btn { display: none !important; }
+
+/* ── Library: top-right button + modal (studio.js renderLibrary) ─── */
+#sa3-libbtn { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 12px 0 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.035);
+  color: #c9c9d6; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+#sa3-libbtn svg { width: 14px; height: 14px; }
+#sa3-libbtn:hover, #sa3-libbtn.on { color: #fff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.14); }
+#sa3-libbtn b { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: linear-gradient(135deg, #9b8cff, #ff6fb5);
+  color: #0b0b10; font: 700 10px/16px "JetBrains Mono", monospace; text-align: center; }
+
+#sa3-lib { position: fixed; inset: 0; z-index: 200; background: rgba(5,5,9,0.5); backdrop-filter: blur(5px);
+  opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+#sa3-lib.open { opacity: 1; pointer-events: auto; }
+#sa3-lib .pane { position: absolute; top: 58px; right: 22px; width: min(1180px, calc(100vw - 44px)); height: calc(100vh - 80px);
+  display: flex; flex-direction: column; border-radius: 18px; overflow: hidden;
+  background: rgba(14,14,20,0.94); border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(155,140,255,0.06);
+  transform-origin: top right; transform: translateY(-8px) scale(0.97); transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+#sa3-lib.open .pane { transform: none; }
+#sa3-lib header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+#sa3-lib h3 { margin: 0; font-size: 15px; font-weight: 700; color: #f4f4fa; letter-spacing: -0.01em; }
+#sa3-lib .cnt { font: 500 11.5px "JetBrains Mono", monospace; color: #7d7d8e; }
+#sa3-lib .sp { flex: 1; }
+#sa3-lib .srt { font-size: 11px; color: #6f6f80; text-transform: uppercase; letter-spacing: .08em; display: flex; align-items: center; gap: 6px; }
+#sa3-lib select, #sa3-lib input[type=search], #sa3-lib input[type=number] { background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 7px; color: #e3e3ee; font-size: 12.5px; padding: 4px 8px; outline: none; text-transform: none; letter-spacing: 0; }
+#sa3-lib input:focus, #sa3-lib select:focus { border-color: rgba(155,140,255,0.55); }
+#sa3-lib .x { width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #8b8b9c; font-size: 20px; line-height: 1; cursor: pointer; }
+#sa3-lib .x:hover { background: rgba(255,255,255,0.07); color: #fff; }
+#sa3-lib .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px 1fr; }
+#sa3-lib aside { padding: 14px 16px; border-right: 1px solid rgba(255,255,255,0.06); overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+#sa3-lib .f { display: flex; flex-direction: column; gap: 7px; }
+#sa3-lib .f .h { font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #7d7d8e; }
+#sa3-lib .f .h em { font-style: normal; text-transform: none; letter-spacing: 0; color: #55556a; font-weight: 500; margin-left: 4px; }
+#sa3-lib .f input[type=search] { width: 100%; }
+#sa3-lib .rng { display: flex; align-items: center; gap: 6px; }
+#sa3-lib .rng input { width: 0; flex: 1; font-family: "JetBrains Mono", monospace; text-align: center; }
+#sa3-lib .rng i { color: #55556a; font-style: normal; }
+#sa3-lib .ck { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #9b9bab; cursor: pointer; }
+#sa3-lib .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+#sa3-lib .chips button { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; cursor: pointer;
+  color: #b9b9c9; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.09); transition: all .12s; }
+#sa3-lib .chips button i { font: 500 10px "JetBrains Mono", monospace; font-style: normal; color: #5f5f70; }
+#sa3-lib .chips button:hover { border-color: rgba(155,140,255,0.45); color: #fff; }
+#sa3-lib .chips button.on { color: #fff; background: rgba(155,140,255,0.22); border-color: rgba(155,140,255,0.7); }
+#sa3-lib .chips button.on i { color: #c4bbff; }
+#sa3-lib .chips .t-green::before, #sa3-lib .chips .t-yellow::before, #sa3-lib .chips .t-orange::before { content: ""; width: 7px; height: 7px; border-radius: 99px; }
+#sa3-lib .chips .t-green::before { background: #5fd894; } #sa3-lib .chips .t-yellow::before { background: #f2d36b; } #sa3-lib .chips .t-orange::before { background: #ff9a52; }
+#sa3-lib .chips .none { font-size: 12px; color: #55556a; }
+#sa3-lib .reset { align-self: flex-start; background: transparent; border: 1px dashed rgba(255,255,255,0.14); color: #8b8b9c; border-radius: 8px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer; }
+#sa3-lib .reset:hover { color: #fff; border-color: rgba(255,90,110,0.5); }
+#sa3-lib .list { overflow-y: auto; padding: 6px 10px 20px; }
+#sa3-lib .r { display: grid; grid-template-columns: 30px 1fr auto; gap: 12px; align-items: start; padding: 12px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.05); border-radius: 10px; transition: background .12s; }
+#sa3-lib .r:hover { background: rgba(255,255,255,0.025); }
+#sa3-lib .r.on { background: rgba(155,140,255,0.07); }
+#sa3-lib .r .pp { width: 30px; height: 30px; border-radius: 99px; display: grid; place-items: center; padding: 0; cursor: pointer; margin-top: 8px;
+  background: rgba(255,255,255,0.06); color: #e9e9f1; border: 1px solid rgba(255,255,255,0.08); }
+#sa3-lib .r .pp svg { width: 11px; height: 11px; }
+#sa3-lib .r .pp:hover { background: rgba(155,140,255,0.3); }
+#sa3-lib .r.on .pp { background: #9b8cff; color: #0b0b10; }
+#sa3-lib .r .mid { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+#sa3-lib .r .spec { position: relative; height: 46px; border-radius: 7px; overflow: hidden; cursor: pointer; border: 1px solid rgba(255,255,255,0.05); }
+#sa3-lib .r .spec img { width: 100%; height: 100%; object-fit: fill; display: block; }
+#sa3-lib .r .spec .ph { position: absolute; top: 0; bottom: 0; left: -4px; width: 2px; background: #fff; box-shadow: 0 0 8px rgba(255,255,255,.7); }
+#sa3-lib .r .pr { display: flex; align-items: flex-start; font-size: 13px; color: #e3e3ee; line-height: 1.4; }
+#sa3-lib .r .pr span { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#sa3-lib .r .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 500 11px "JetBrains Mono", monospace; color: #6f6f80; }
+#sa3-lib .sa3-lab.lib { margin-top: 0; }
+#sa3-lib .sa3-lab .tag { padding: 1px 9px; cursor: pointer; }
+#sa3-lib .sa3-lab .tag:hover { border-color: rgba(155,140,255,0.6); }
+#sa3-lib .scb { font: 700 12px "JetBrains Mono", monospace; color: #0b0b10; background: linear-gradient(135deg, #9b8cff, #ff6fb5); padding: 1px 7px; border-radius: 6px; }
+#sa3-lib .scb i { font-style: normal; font-weight: 500; opacity: .6; font-size: 10px; }
+#sa3-lib .r .rs { margin-top: 8px; }
+#sa3-lib .empty, #sa3-lib .more { color: #5f5f70; font-size: 13px; text-align: center; padding: 40px 0 10px; }
+#sa3-libbtn { width: auto !important; min-width: 0 !important; flex: none; }
+/* slider header: label + number box on one line even in the 40 % column */
+.gradio-container .head { flex-wrap: nowrap !important; gap: 6px !important; align-items: center !important; }
+.gradio-container .head > label { min-width: 0; }
+.gradio-container .head { gap: 8px !important; }
+.gradio-container .head [data-testid="block-info"] { font-size: 13px !important; overflow: hidden; text-overflow: ellipsis; display: block; }
+.gradio-container .head > .tab-like-container { flex: none; }
+.gradio-container .tab-like-container input[type=number] { width: 54px !important; min-width: 54px !important; }
