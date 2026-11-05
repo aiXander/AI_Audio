@@ -1,9 +1,6 @@
 # Code, config and docs only. No weights, audio, datasets or caches.
 
-# Cloned upstream repos: live here locally, never tracked.
-# Cloning a new model repo into this folder? Add it below.
-/stable-audio-3/
-/underfit/
+# Model repos (stable-audio-3/, underfit/) are git submodules: see .gitmodules.
 
 # Weights, caches, datasets, renders
 /models/

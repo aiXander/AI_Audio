@@ -1,0 +1,8 @@
+[submodule "stable-audio-3"]
+	path = stable-audio-3
+	url = https://github.com/aiXander/stable-audio-3.git
+	branch = main
+[submodule "underfit"]
+	path = underfit
+	url = https://github.com/aiXander/underfit.git
+	branch = main
