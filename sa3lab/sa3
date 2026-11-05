@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Upstream's ./sa3 CLI, but any missing weights download into AI_Audio/models/hf-cache
+# instead of ~/.cache, so all SA3 models stay in one deletable folder.
+#   sa3lab/sa3 --dit medium --decoder same-l --prompt "..." --out /abs/path.wav
+set -e
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HERE/../models/hf-cache}"
+exec "$HERE/../stable-audio-3/optimized/mlx/sa3" "$@"

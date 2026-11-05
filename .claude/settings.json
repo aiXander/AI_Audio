@@ -1,0 +1,6 @@
+{
+  "env": {
+    "HF_HUB_CACHE": "/Users/xandersteenbrugge/Documents/GitHub/AI_Audio/models/hf-cache",
+    "TORCH_HOME": "/Users/xandersteenbrugge/Documents/GitHub/AI_Audio/models/torch-cache"
+  }
+}

@@ -1,0 +1,157 @@
+/* SA3 Studio skin. Loaded by studio.py on top of upstream's gradio UI. */
+:root { color-scheme: dark; }
+body, gradio-app {
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(155,140,255,0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(255,111,181,0.06), transparent 60%),
+    #09090d !important;
+}
+.gradio-container { width: 100% !important; max-width: 1440px !important; margin: 0 auto !important; padding: 28px 36px 40px !important; }
+.gradio-container > .main { max-width: none !important; width: 100% !important; padding: 0 !important; }
+footer { display: none !important; }
+
+/* ── header ───────────────────────────────────────── */
+.sa3-header, .sa3-footer, .sa3-sec-wrap { background: none !important; border: none !important; padding: 0 !important; box-shadow: none !important; }
+.sa3h { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 2px 14px; flex-wrap: wrap; }
+.sa3h-brand { display: flex; align-items: center; gap: 14px; }
+.sa3h-logo { width: 42px; height: 42px; filter: drop-shadow(0 6px 18px rgba(155,140,255,0.35)); }
+.sa3h-name { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: #f4f4fa; line-height: 1.15; }
+.sa3h-tag { font-size: 13px; color: #8b8b9c; margin-top: 2px; }
+.sa3h-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.sa3h-chips span { font-size: 12px; color: #b9b9c9; padding: 5px 11px; border-radius: 999px;
+  background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.07); }
+
+/* ── blocks & inputs ──────────────────────────────── */
+.block, .form { box-shadow: none !important; }
+.form { border-color: rgba(255,255,255,0.06) !important; }
+textarea, input[type=text], input[type=number] { transition: border-color .15s, box-shadow .15s; }
+textarea:focus, input[type=text]:focus, input[type=number]:focus { box-shadow: 0 0 0 3px rgba(155,140,255,0.15) !important; }
+textarea { font-size: 15px !important; line-height: 1.5 !important; }
+input[type=number] { font-family: "JetBrains Mono", ui-monospace, monospace !important; font-size: 13px !important; }
+[data-testid="block-info"], .block-info { letter-spacing: 0.01em; }
+
+/* accordions → quiet cards */
+.label-wrap { font-weight: 600 !important; font-size: 14px !important; color: #d6d6e2 !important; }
+.label-wrap:hover { color: #ffffff !important; }
+
+/* buttons */
+button.secondary { transition: background .15s, border-color .15s; }
+button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
+
+/* ── generate ─────────────────────────────────────── */
+#sa3-generate {
+  min-height: 58px; font-size: 16px !important; letter-spacing: 0.01em;
+  box-shadow: 0 10px 30px -10px rgba(170,120,255,0.65), inset 0 1px 0 rgba(255,255,255,0.25) !important;
+  transition: transform .12s ease, box-shadow .2s ease, filter .2s ease !important;
+}
+#sa3-generate:hover { filter: brightness(1.08); transform: translateY(-1px);
+  box-shadow: 0 16px 38px -12px rgba(170,120,255,0.8), inset 0 1px 0 rgba(255,255,255,0.3) !important; }
+#sa3-generate:active { transform: translateY(0); filter: brightness(0.97); }
+#sa3-generate::after { content: "⌘↵"; margin-left: 10px; font-size: 12px; opacity: .6; font-weight: 500; }
+
+/* ── output column ────────────────────────────────── */
+#sa3-out { position: sticky; top: 16px; align-self: flex-start; }
+.sa3-sec { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #7d7d8e; margin: 10px 2px 2px; }
+
+.sa3-player .blk { background: #0d0d12; border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 12px; }
+.sa3-player.is-empty { min-height: 230px; border: 1px dashed rgba(255,255,255,0.10) !important; border-radius: 16px !important;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,0.015) 0 2px, transparent 2px 9px) !important;
+  display: flex !important; align-items: center; justify-content: center; }
+.sa3-player.is-empty::after { content: "Your render will appear here"; color: #5f5f70; font-size: 14px; position: absolute;
+  left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; pointer-events: none; }
+.sa3-player { position: relative; }
+
+audio { color-scheme: dark; width: 100%; height: 40px; border-radius: 999px; }
+audio::-webkit-media-controls-panel { background: #1a1a23; }
+audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 999px; }
+.blk img[alt="spectrogram"] { image-rendering: auto !important; border: 1px solid rgba(255,255,255,0.06) !important; border-radius: 10px; margin-top: 10px; }
+.sa3-player .blk img[alt="spectrogram"] { height: 150px; object-fit: fill; }
+.blk .ph { background: #fff !important; box-shadow: 0 0 10px rgba(255,255,255,.7) !important; }
+.sa3-player .blk .ph { top: 10px !important; }
+
+/* stats readout (built by studio.js from upstream's timing line) */
+.sa3-stats { background: #0d0d12; border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 14px 16px; }
+.sa3-stats .p { font-size: 14px; color: #e3e3ee; line-height: 1.45; margin-bottom: 4px; }
+.sa3-stats .neg { font-size: 12.5px; color: #8b8b9c; margin-bottom: 4px; }
+.sa3-stats .notes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.sa3-stats .notes span { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: rgba(155,140,255,0.10); color: #c4bbff; border: 1px solid rgba(155,140,255,0.22); }
+.sa3-stats .warn { font-size: 12.5px; color: #ffb35c; margin: 4px 0; }
+.sa3-stats .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 12px; }
+.sa3-stats .kpis div { background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 9px 11px; }
+.sa3-stats .kpis b { display: block; font: 600 17px/1.2 "JetBrains Mono", ui-monospace, monospace; color: #f4f4fa; }
+.sa3-stats .kpis span { font-size: 11px; color: #7d7d8e; text-transform: uppercase; letter-spacing: 0.08em; }
+.sa3-stats .kpis .seed { cursor: pointer; transition: border-color .15s; }
+.sa3-stats .kpis .seed:hover { border-color: rgba(155,140,255,0.5); }
+.sa3-stats .kpis .seed:hover span::after { content: " · reuse"; color: #b9afff; }
+.sa3-stats .bar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.05); gap: 2px; }
+.sa3-stats .bar i { display: block; min-width: 3px; }
+.sa3-stats .bar .t5 { background: #ff6fb5; } .sa3-stats .bar .smp { background: #9b8cff; } .sa3-stats .bar .dec { background: #4fd1c5; } .sa3-stats .bar .oth { background: #3a3a48; }
+.sa3-stats .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: #8b8b9c; }
+.sa3-stats .legend em { font-style: normal; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+
+/* empty slots collapse */
+.sa3-timing.is-empty, .sa3-error.is-empty, .sa3-queued.is-empty, .sa3-history.is-empty { display: none !important; }
+
+/* queue chip + errors (upstream inline styles) */
+/* only the slot's content, never gradio's status overlay (.wrap) */
+.sa3-queued .prose > div { background: rgba(155,140,255,0.07) !important; border: 1px solid rgba(155,140,255,0.22); color: #c4bbff !important; border-radius: 12px !important; padding: 8px 12px !important; }
+.sa3-error .prose > * { display: block; color: #ff8a9a !important; background: rgba(255,90,110,0.08); border: 1px solid rgba(255,90,110,0.3); border-radius: 12px; padding: 10px 12px; }
+
+/* history */
+.sa3-history div:has(+ #sa3-hist) { font-size: 11px !important; font-weight: 600 !important; letter-spacing: 0.12em; text-transform: uppercase; color: #7d7d8e; margin: 14px 2px 6px !important; }
+#sa3-hist { max-height: 520px !important; padding-right: 4px !important; }
+#sa3-hist .blk { background: transparent !important; border-radius: 0; padding: 12px 4px !important; transition: background .12s; }
+#sa3-hist .blk + .blk { border-top: 1px solid rgba(255,255,255,0.06); }
+#sa3-hist .blk:hover { background: rgba(255,255,255,0.02) !important; }
+#sa3-hist .sa3-hrow { flex-direction: column !important; align-items: stretch !important; gap: 6px !important; }
+#sa3-hist .sa3-hrow > div { flex: none !important; width: 100%; }
+#sa3-hist .sa3-native { display: none !important; }
+#sa3-hist .blk img[alt="spectrogram"] { height: 64px !important; margin-top: 0; border-radius: 8px; }
+#sa3-hist .blk > div:last-child { color: #7d7d8e !important; font-size: 12px !important; margin-top: 8px !important; line-height: 1.4; }
+
+/* tiny transport bar */
+.sa3-mini { display: flex; align-items: center; gap: 8px; height: 24px; }
+.sa3-mini .pp { width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; padding: 0;
+  background: rgba(255,255,255,0.06); color: #e9e9f1; border: 1px solid rgba(255,255,255,0.08); cursor: pointer; transition: background .12s; }
+.sa3-mini .pp:hover { background: rgba(155,140,255,0.25); }
+.sa3-mini.on .pp { background: #9b8cff; color: #0b0b10; border-color: transparent; }
+.sa3-mini svg { width: 11px; height: 11px; display: block; }
+.sa3-mini .tm { font: 500 11.5px "JetBrains Mono", ui-monospace, monospace; color: #8b8b9c; }
+.sa3-mini.on .tm { color: #c4bbff; }
+.sa3-mini .sp { flex: 1; }
+.sa3-mini .dl, .sa3-mini .grip { color: #5f5f70; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; }
+.sa3-mini .dl:hover { color: #e9e9f1; background: rgba(255,255,255,0.06); }
+.sa3-mini .grip { cursor: grab; }
+.sa3-mini svg { width: 13px; height: 13px; }
+.sa3-mini .pp svg { width: 10px; height: 10px; }
+
+/* drag & drop */
+#sa3-out .blk[draggable="true"] { cursor: default; }
+#sa3-out .blk[draggable="true"]:active { cursor: grabbing; }
+body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55); outline-offset: 2px; border-radius: 14px; transition: outline-color .12s, background .12s; }
+.block.sa3-drop.sa3-over { outline: 2px solid #9b8cff !important; background: rgba(155,140,255,0.08) !important; }
+.block.sa3-drop.sa3-loading { opacity: .6; pointer-events: none; }
+
+/* scrollbars */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.12) transparent; }
+
+/* footer */
+.sa3f { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; color: #5f5f70; font-size: 12px; padding: 18px 0 0; }
+.sa3f code { background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 6px; color: #9b9bab; font-size: 11.5px; }
+.sa3f kbd { font: 11px "JetBrains Mono", monospace; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; margin-right: 2px; color: #b9b9c9; }
+
+/* loading state: one status overlay (on the player), none on the side slots */
+.sa3-timing > .wrap, .sa3-error > .wrap, .sa3-queued > .wrap, .sa3-history > .wrap { display: none !important; }
+.block.sa3-timing, .block.sa3-error, .block.sa3-queued, .block.sa3-history { border: none !important; background: none !important; }
+.sa3-player > .wrap { background: rgba(9,9,13,0.72) !important; backdrop-filter: blur(6px); border-radius: 16px; }
+.sa3-player > .wrap .progress-text, .sa3-player > .wrap .meta-text, .sa3-player > .wrap .meta-text-center {
+  font: 500 13px "JetBrains Mono", ui-monospace, monospace !important; color: #c4bbff !important; }
+.sa3-player > .wrap .eta-bar { background: linear-gradient(90deg, rgba(155,140,255,0.25), rgba(255,111,181,0.25)) !important; opacity: 1 !important; }
+.block.sa3-player { border: none !important; background: none !important; padding: 0 !important; }
+
+/* first render: a living placeholder while the model works */
+.sa3-player.is-busy { min-height: 230px; border-radius: 16px !important; border: 1px solid rgba(155,140,255,0.22) !important;
+  background: linear-gradient(100deg, #0d0d12 20%, rgba(155,140,255,0.09) 40%, rgba(255,111,181,0.07) 50%, #0d0d12 70%) !important;
+  background-size: 250% 100% !important; animation: sa3-sweep 1.8s linear infinite; }
+.sa3-player.is-busy > .wrap { background: transparent !important; backdrop-filter: none; }
+@keyframes sa3-sweep { from { background-position: 150% 0; } to { background-position: -100% 0; } }

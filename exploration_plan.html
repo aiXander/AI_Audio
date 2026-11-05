@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA3 &amp; beyond — exploration plan</title>
+<style>
+  :root{
+    --paper:#f6f3ec; --card:#fffdf8; --ink:#1c1b19; --mute:#6b665c; --line:#e2ddd2;
+    --p0:#5b5b5b; --p1:#c2571a; --p2:#1f7a6d; --p3:#3b5bdb; --p4:#9c36b5; --p5:#c92a2a; --p6:#5c940d;
+    --amber:#b7791f; --amberbg:#fdf3dc;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Helvetica Neue",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:48px 28px 96px}
+  h1,h2{font-family:"Iowan Old Style","Palatino","Georgia",serif;font-weight:600;letter-spacing:-.01em}
+  h1{font-size:40px;margin:0 0 6px}
+  h2{font-size:26px;margin:56px 0 6px}
+  .sub{color:var(--mute);margin:0 0 28px}
+  .lead{font-size:17px;max-width:820px}
+  code,.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+  code{background:#ece7dc;padding:1px 5px;border-radius:4px}
+  pre{background:#22211f;color:#f1ede4;padding:12px 14px;border-radius:8px;overflow:auto;font-size:12.5px;margin:8px 0 0}
+  pre code{background:none;padding:0;color:inherit}
+  table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#efeadf;font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;color:#4a463e}
+  tr:last-child td{border-bottom:none}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr}}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .box h3{margin:0 0 8px;font-size:15px}
+  .box ul{margin:0;padding-left:18px}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;margin-left:4px;vertical-align:2px;white-space:nowrap}
+  .gate{background:var(--amberbg);color:var(--amber);border:1px solid #f0d9a6}
+  .free{background:#e6f4ea;color:#2b7a3d;border:1px solid #bfe3c9}
+  .rec{background:#1c1b19;color:#fff}
+  .phase{border-left:5px solid var(--c);padding-left:16px;margin-top:52px}
+  .phase h2{margin:0;color:var(--c)}
+  .phase .goal{margin:4px 0 4px;max-width:860px}
+  .phase .deliv{color:var(--mute);font-size:14px;margin:0 0 14px}
+  .phase .deliv b{color:var(--ink)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px 12px;position:relative}
+  .card.done{opacity:.55}
+  .card .hd{display:flex;gap:10px;align-items:flex-start}
+  .card input{margin-top:4px;accent-color:var(--c);width:16px;height:16px;flex:none}
+  .card .id{font:600 12px ui-monospace,Menlo,monospace;color:var(--c)}
+  .card .t{font-weight:650;font-size:15px;line-height:1.3}
+  .card dl{margin:8px 0 0;display:grid;grid-template-columns:68px 1fr;gap:4px 8px;font-size:13.5px}
+  .card dt{color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
+  .card dd{margin:0}
+  .star{position:absolute;top:10px;right:12px}
+  svg text{font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--mute);margin-top:10px}
+  .callout{background:#1c1b19;color:#f6f3ec;border-radius:14px;padding:20px 22px;margin-top:22px}
+  .callout h3{margin:0 0 8px;font-family:"Iowan Old Style",Georgia,serif;font-size:20px}
+  .callout ol{margin:0;padding-left:20px}
+  .callout code{background:#3a3833;color:#fff}
+  .progress{font-size:13px;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>SA3 &amp; beyond — exploration plan</h1>
+<p class="sub">AI_Audio research bench · 2026-11-05 · built from the repo, the local reference docs and the ~50-idea backlog in the SAME-L research doc · <span class="progress" id="progress"></span></p>
+
+<p class="lead"><b>The goal is to make Stable Audio 3 sound like something it was never trained to sound like.</b> Out of the box SA3 is "correct but not compelling": seeds converge on similar melodies and defaults sound like stock music. This plan works outward from cheapest to deepest. First map the knobs we already have, then treat the SAME codec as an instrument on its own, then rewrite the sampler, then train lightly, then add new controls, and finally chain SA3 with other models. Every phase produces sounds, not just infrastructure.</p>
+
+<h2>Where the bench is today</h2>
+<div class="grid2">
+  <div class="box">
+    <h3>What's installed and what it means</h3>
+    <ul>
+      <li><b>On disk:</b> Small-Music + SAME-S (30 s clip in ~5 s) and <b>Medium + SAME-L</b> (20 s clip in ~11 s, 3.6 GB peak RAM), plus the T5Gemma text encoder. The local web UI runs at <code>localhost:7860</code>.</li>
+      <li><b>Not downloaded:</b> Small-SFX and the <code>-base</code> (pre-distillation) checkpoints. See the download decisions at the bottom.</li>
+      <li><b>Machine:</b> 24 GB unified memory, <b>76 GB free disk</b>. The reference doc still says 16 GB free, which is out of date, so downloads are no longer the blocker they were.</li>
+      <li><b>No renders exist yet.</b> <code>AI_Audio/outputs/</code> doesn't exist, and the first test render listed in the research doc is gone.</li>
+    </ul>
+  </div>
+  <div class="box">
+    <h3>The two code facts that shape the plan</h3>
+    <ul>
+      <li><b>One hook for every sampler trick.</b> <code>optimized/mlx/scripts/sa3_mlx.py</code> builds a <code>model_fn(x, t)</code> that returns a velocity and passes it to <code>sample_flow_pingpong()</code> in <code>models/defs/sa3_pipeline.py</code>. Our own script can import both and swap in any <code>model_fn</code>, so upstream files are never edited.</li>
+      <li><b>The MLX DiT only wires inpainting conditioning.</b> SA3's designed slot for new time-varying controls (<code>modular_local_cond</code>, zero-initialised, so it's a no-op until trained) exists only in the PyTorch code. Using it on the Mac means porting it first (Phase 5).</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Roadmap</h2>
+<p style="margin:0 0 12px;max-width:820px">Phases 1 and 2 run in parallel on what's already on disk. The amber tags are download gates: an experiment with a gate waits for that download.</p>
+<div class="box" style="padding:10px 6px">
+<svg viewBox="0 0 1020 300" width="100%" role="img" aria-label="Phase dependency diagram">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a8478"/></marker>
+  </defs>
+  <g fill="none" stroke="#8a8478" stroke-width="1.6" marker-end="url(#ar)">
+    <path d="M170,130 C200,130 200,68 226,68"/>
+    <path d="M170,150 C200,150 200,212 226,212"/>
+    <path d="M380,68 L446,68"/>
+    <path d="M380,200 C414,200 414,86 446,86"/>
+    <path d="M380,212 L446,212"/>
+    <path d="M600,68 L666,68"/>
+    <path d="M820,68 L846,68"/>
+  </g>
+  <g font-size="11" fill="#8a8478"><text x="426" y="162">harness + bend ops</text></g>
+  <!-- boxes -->
+  <g font-size="14" font-weight="650" fill="#fff">
+    <rect x="20" y="112" width="150" height="56" rx="10" fill="#5b5b5b"/><text x="95" y="136" text-anchor="middle">P0 Bench</text>
+    <rect x="230" y="40" width="150" height="56" rx="10" fill="#c2571a"/><text x="305" y="64" text-anchor="middle">P1 Knob map</text>
+    <rect x="230" y="184" width="150" height="56" rx="10" fill="#1f7a6d"/><text x="305" y="208" text-anchor="middle">P2 Codec lab</text>
+    <rect x="450" y="40" width="150" height="56" rx="10" fill="#3b5bdb"/><text x="525" y="64" text-anchor="middle">P3 Sampler hacks</text>
+    <rect x="450" y="184" width="150" height="56" rx="10" fill="#5c940d"/><text x="525" y="208" text-anchor="middle">P6 Beyond SA3</text>
+    <rect x="670" y="40" width="150" height="56" rx="10" fill="#9c36b5"/><text x="745" y="64" text-anchor="middle">P4 Light training</text>
+    <rect x="850" y="40" width="150" height="56" rx="10" fill="#c92a2a"/><text x="925" y="64" text-anchor="middle">P5 New control</text>
+  </g>
+  <g font-size="11" fill="#fff" opacity=".9">
+    <text x="95" y="155" text-anchor="middle">harness · grid · labels</text>
+    <text x="305" y="83" text-anchor="middle">existing flags, no code</text>
+    <text x="305" y="227" text-anchor="middle">SAME only, no DiT</text>
+    <text x="525" y="83" text-anchor="middle">custom model_fn</text>
+    <text x="525" y="227" text-anchor="middle">chain other models</text>
+    <text x="745" y="83" text-anchor="middle">merge · steer · LoRA</text>
+    <text x="925" y="83" text-anchor="middle">port + train a control</text>
+  </g>
+  <!-- gate tags -->
+  <g font-size="11" font-weight="600">
+    <rect x="248" y="104" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="305" y="118" text-anchor="middle" fill="#b7791f">A for one-shot kits</text>
+    <rect x="248" y="248" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="305" y="262" text-anchor="middle" fill="#b7791f">B for SAME-L · D</text>
+    <rect x="468" y="104" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="525" y="118" text-anchor="middle" fill="#b7791f">A · B for AudEdit</text>
+    <rect x="468" y="248" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="525" y="262" text-anchor="middle" fill="#b7791f">D · own installs</text>
+    <rect x="688" y="104" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="745" y="118" text-anchor="middle" fill="#b7791f">C · your material</text>
+    <rect x="868" y="104" width="114" height="20" rx="10" fill="#fdf3dc" stroke="#f0d9a6"/><text x="925" y="118" text-anchor="middle" fill="#b7791f">C · port to MLX</text>
+  </g>
+</svg>
+<div class="legend" style="padding:0 12px 6px">
+  <span><b style="color:var(--amber)">A</b> Small-SFX DiT, 0.9 GB</span>
+  <span><b style="color:var(--amber)">B</b> Medium DiT + SAME-L enc/dec, 6.3 GB</span>
+  <span><b style="color:var(--amber)">C</b> a <code>-base</code> DiT: small 0.9 GB, medium 2.9 GB</span>
+  <span><b style="color:var(--amber)">D</b> stem separator (python-audio-separator / Demucs)</span>
+</div>
+</div>
+
+<div class="callout">
+  <h3>Recommended first session</h3>
+  <ol>
+    <li><b>P0.1–0.3:</b> make <code>outputs/</code>, the <code>sa3lab/</code> harness and the grid renderer. Everything after this reuses them.</li>
+    <li><b>P1.1, the extreme-knob grid,</b> on Small-Music, then score it in the labeling page. This is the cheapest map of the model's weird corners.</li>
+    <li><b>P2.3, latent circuit-bending</b> on SAME-S with a track of your own. This tests whether the codec is an instrument in itself.</li>
+    <li>Say yes to <b>gates A and B</b>. That unlocks cross-model guidance, SAME-L and AudEdit for the next session.</li>
+  </ol>
+</div>
+
+<div id="phases"></div>
+
+<h2>Decisions only you can make</h2>
+<table>
+  <tr><th style="width:30%">Decision</th><th>What it unlocks</th><th style="width:26%">Recommendation</th></tr>
+  <tr><td><b>Gate A</b>: download Small-SFX (0.9 GB)</td><td>Cross-model guidance (music minus/plus SFX), prompt-defined one-shot kits. Shares SAME-S, so no new codec.</td><td><span class="pill rec">Yes, now</span> it's cheap and fits easily.</td></tr>
+  <tr><td><b>Gate B</b>: download Medium + SAME-L (6.3 GB)</td><td>The real quality tier, the SAME-L codec experiments, AudEdit (its paper was built on SA3-medium), lengths up to 380 s.</td><td><span class="pill free">Done</span> downloaded 2026-11-05.</td></tr>
+  <tr><td><b>Gate C</b>: download a <code>-base</code> DiT (0.9 or 2.9 GB)</td><td>The base/ARC weight merge, inversion-based edits, and LoRA training (LoRAs train on base).</td><td>When Phase 4 starts. Start with <code>sm-music-base</code>.</td></tr>
+  <tr><td><b>Your material</b>: what audio do you have?</td><td>A LoRA on your own sound needs 30+ min of one coherent style. Your voice, beatbox or field recordings feed P1.3 straight away.</td><td>Pick one coherent set; if there isn't one, write a recording protocol and record it.</td></tr>
+  <tr><td><b>Modal</b> (paid GPU)</td><td>Only the single-instrument SAME decoder finetune (P4.6) needs it. Everything else runs on the Mac.</td><td>Not yet. Ask again when P4.6 is next.</td></tr>
+</table>
+
+<h2>House rules for every experiment</h2>
+<div class="grid2">
+  <div class="box"><h3>The logging loop</h3>
+    <ul>
+      <li>Renders go to <code>AI_Audio/outputs/&lt;phase.id&gt;_&lt;name&gt;/</code>. Filenames say model + experiment + key setting, e.g. <code>sm-music_cfg-neg1_noise2.0_s7.wav</code>.</li>
+      <li>Each render gets a <code>.json</code> sidecar with every flag and the seed. A sound you can't reproduce is lost.</li>
+      <li>Score grids in a labeling page (the <code>labeling-ui</code> skill), which writes <code>labels.json</code>. The next round builds on those labels.</li>
+      <li>Keepers and interesting failures go into the research doc's Log as a dated row with their settings.</li>
+    </ul></div>
+  <div class="box"><h3>Code hygiene</h3>
+    <ul>
+      <li>Our code lives in <code>AI_Audio/sa3lab/</code>, outside the upstream clone. It runs with the MLX venv (<code>stable-audio-3/optimized/mlx/.venv/bin/python</code>) and puts <code>optimized/mlx</code> on <code>sys.path</code>.</li>
+      <li>Upstream files stay read-only, so <code>git pull --ff-only</code> keeps working.</li>
+      <li>Always pass an absolute <code>--out</code> to <code>./sa3</code>. Relative paths land in <code>optimized/mlx/output/</code>, whatever your cwd.</li>
+      <li>Post-trained DiTs want ping-pong, ~8 steps, CFG 1. The <code>-base</code> DiTs want ~50 Euler steps at CFG ~7. Mixing them up is off-distribution, which can be the point, but should be a deliberate choice.</li>
+    </ul></div>
+</div>
+
+</div>
+
+<script>
+const S = 'stable-audio-3/optimized/mlx/sa3';
+const PHASES = [
+ {id:'P0', c:'--p0', name:'Bench', goal:'Build the three tools every later experiment reuses: an output layout with reproducible settings, a Python harness that exposes the MLX pieces, and a grid → listen → label loop.',
+  deliv:'<b>Done when</b> one command renders a parameter grid into a named folder with sidecars and opens a page to score it.',
+  items:[
+   {id:'0.1', t:'Output layout + settings sidecars', star:true, gate:[], do:'Create <code>AI_Audio/outputs/</code>. A thin <code>sa3lab/render.py</code> wraps <code>./sa3</code>: absolute <code>--out</code>, descriptive filename, and a <code>.json</code> of every flag and seed next to each wav.', listen:'n/a. This is plumbing.', needs:'nothing'},
+   {id:'0.2', t:'sa3lab harness', star:true, gate:[], do:'One module with <code>load_dit()</code>, <code>load_encoder/decoder()</code>, <code>encode(wav) → latents (256 × frames)</code>, <code>decode(latents)</code>, <code>embed(prompt)</code>, and <code>sample(model_fn, sigmas)</code>, all imported from <code>optimized/mlx</code>. Phases 2 and 3 are thin scripts on top of it.', listen:'Parity: harness output equals <code>./sa3</code> output for the same prompt and seed.', needs:'nothing'},
+   {id:'0.3', t:'Grid renderer + labeling page', star:true, gate:[], do:'<code>grid.py --prompt … --sweep cfg=-1,0.5,3 noise=1,1.3,2</code> renders the cartesian product, then a labeling page (stars, tags, notes) writes <code>labels.json</code> into the folder.', listen:'Which corners are worth a second round.', needs:'nothing'},
+  ]},
+ {id:'P1', c:'--p1', name:'Knob map — existing flags, no code', goal:'Find out how far the current CLI already bends SA3, using only Small-Music and its flags. Off-label settings are the fastest way out of the stock-music sound.',
+  deliv:'<b>Deliverable:</b> a "knob atlas", meaning 3–5 settings that reliably give non-stock results, logged with seeds.',
+  items:[
+   {id:'1.1', t:'Extreme-knob grid', star:true, gate:[], do:'One prompt × 3 seeds × <code>--cfg</code> {−1, 0, 0.5, 1, 3} × <code>--init-noise-level</code> {1.0, 1.3, 2.0} (above 1 means "guidance overshoot" with no init audio) × <code>--steps</code> {1, 2, 8}. Add <code>--negative-prompt "stock music, corporate, polished"</code> to the CFG ≠ 1 cells.', listen:'Negative CFG pushes <i>away</i> from the prompt. 1–2 steps give smeared, blurry textures. Noise 2.0 sounds increasingly weird.', needs:'nothing', cmd:`${S} --dit sm-music --decoder same-s --seconds 30 --seed 7 \\\n  --prompt "TrackType: Music, Genre: Dub Techno" --cfg -1 --init-noise-level 2.0 \\\n  --out $PWD/outputs/1.1_knobgrid/sm-music_cfg-neg1_noise2.0_s7.wav`},
+   {id:'1.2', t:'Prompt vocabulary and duration', gate:[], do:'The training captions were AudioSparx metadata, so test tag-style (<code>Genre: Gamelan, Genre: Drill, BPM: 172</code>) against prose, clashing tags, an empty prompt, and with or without the <code>TrackType:</code> prefix. Run the same prompt at 10 s, 60 s and 120 s.', listen:'Short requests come out loopy. Long ones drift toward ambient or classical, because long training tracks mostly were. Duration works as a style knob.', needs:'nothing'},
+   {id:'1.3', t:'Your gesture, its sound', star:true, gate:[], do:'Use voice, beatbox, a sine sweep or street noise as <code>--init-audio</code> at noise 0.3 / 0.5 / 0.7 / 0.9 with a <code>TrackType: Instrument</code> prompt. The wav must be 44.1 kHz 16-bit.', listen:'The point where your rhythm survives but the timbre becomes the model\'s, i.e. SA3 played like an instrument.', needs:'your recordings'},
+   {id:'1.4', t:'Inpainting as an editing tool', gate:[], do:'<code>--inpaint-range a,b</code> over your own track: re-roll one bar, bridge two clips (keep both ends, generate the middle), and an endless chain that continues from the last 10 s of each chunk with slowly rotating prompts.', listen:'Seams, and the hi-freq "squeaks" that compound over many encode/decode passes (a known SAME artifact).', needs:'nothing'},
+   {id:'1.5', t:'Prompt-defined one-shot kit', gate:['A'], do:'<code>--dit sm-sfx --seconds 2</code> with prompts written as source + action + mic/room ("brass bowl struck with a rubber mallet, close mic, dead room"), many seeds. Drop the keepers in a Drum Rack.', listen:'Sounds that don\'t exist as samples.', needs:'Small-SFX'},
+  ]},
+ {id:'P2', c:'--p2', name:'Codec lab — SAME as an instrument', goal:'Leave the DiT out: encode audio to SAME latents, transform them, and decode. SAME was trained so that pitch content (chroma) and stereo image are linearly readable from its latents, which makes them unusually good to manipulate. One latent frame ≈ 93 ms, so a 120 bpm bar is ≈ 21.6 frames.',
+  deliv:'<b>Deliverable:</b> <code>sa3lab/bend.py</code> with a menu of latent ops, plus a verdict on which ops sound musical and which only sound broken.',
+  items:[
+   {id:'2.1', t:'Round-trip SAME-S vs SAME-L', gate:['B'], do:'Encode and decode a few of your own tracks (dense mix, sparse acoustic, something with vocals) through both codecs. Do SAME-S now and add SAME-L when gate B is in.', listen:'What breaks first: transients, stereo width, or vocals (it was trained without vocals). This sets the baseline for everything after.', needs:'own tracks'},
+   {id:'2.2', t:'Codec feedback loop', gate:[], do:'Run encode → decode N times and keep every pass. Inject a small perturbation per pass (gain, a latent nudge, a pitch shift).', listen:'A latent "I Am Sitting in a Room": the attractor the audio converges to is the codec\'s own sound.', needs:'nothing'},
+   {id:'2.3', t:'Latent circuit-bending', star:true, gate:[], do:'Ops on the (256 × frames) array: per-channel scale / invert / threshold / quantise to N levels, reverse or shuffle frames within a beat, resample frames to time-stretch, and swap channel subsets between two tracks.', listen:'Which ops act like FX (filter, stutter, smear) and which change the musical content.', needs:'nothing'},
+   {id:'2.4', t:'Morphs and a 2D morph surface', gate:[], do:'Interpolate two tracks\' latents linearly and with slerp, then do a bilinear blend of four latents rendered as a 5 × 5 grid.', listen:'Whether the in-between frames are real hybrids or just a crossfade. The paper claims a smooth, generation-friendly space, and this tests it.', needs:'nothing'},
+   {id:'2.5', t:'Chroma + stereo probes → steering', star:true, gate:[], do:'Fit linear regressors from latents to chroma (12 pitch classes, via librosa) and to left/right level difference. Then push latents along the probe directions.', listen:'If chroma is linear: is a push along a pitch-class direction a key change or harmonic mush? A push along the stereo direction should give auto-pan.', needs:'librosa'},
+   {id:'2.6', t:'Linearity test with stems', gate:['D'], do:'Compare enc(a+b) with enc(a)+enc(b) on separated stems. Then try "mix minus drums" in latent space.', listen:'Near-linear means latent stem surgery is possible. If not, the residual is a new sound in itself.', needs:'stem separator'},
+   {id:'2.7', t:'Latent granular resynthesis', gate:[], do:'Encode a corpus (an album, or 200 SA3 renders) into 1–5-frame grains. Rebuild a target track grain by grain from its nearest neighbours in the corpus, with a temperature knob.', listen:'One record\'s rhythm re-performed in another record\'s sounds.', needs:'a corpus'},
+   {id:'2.8', t:'Decoder weight bending', gate:[], do:'Per SAME decoder block: scale attention or MLP output, ablate heads, skip or swap blocks. Render a block × op grid on one fixed latent.', listen:'Bending this kind of codec has worked before (RAVE: one bias shift shortened drum sustain). Nobody has published it for a transformer codec.', needs:'nothing'},
+  ]},
+ {id:'P3', c:'--p3', name:'Sampler hacks — a custom model_fn', goal:'SA3 is a rectified-flow model, so every trick that combines or perturbs velocities also works on the fast 8-step model. Each idea here is a short script that builds its own <code>model_fn</code> and calls the harness sampler.',
+  deliv:'<b>Deliverable:</b> <code>sa3lab/samplers/</code>, one file per trick, each with one or two signature renders logged.',
+  items:[
+   {id:'3.1', t:'Prompt timeline', star:true, gate:[], do:'Switch prompts across steps: prompt A for steps 1–3 (structure), prompt B for 4–8 (surface timbre). Then try per-frame blends: prompt A in the first half of the clip, B in the second, swapping frames in the overlap instead of averaging.', listen:'A jazz arrangement with techno timbres. A verse in dub and a drop in gabber, in one coherent pass.', needs:'nothing'},
+   {id:'3.2', t:'Perfect loops', gate:[], do:'Treat time as circular: roll the latent by a random offset before each step and un-roll after. Pick a loop length of whole bars (≈ 10.77 frames/s).', listen:'Seamless loops from any prompt, and endless drones.', needs:'nothing'},
+   {id:'3.3', t:'Cross-model guidance', star:true, gate:['A'], do:'Replace CFG\'s unconditional branch with a second model: v = v<sub>A</sub> + w·(v<sub>A</sub> − v<sub>B</sub>). sm-music vs sm-sfx share one latent space, so it\'s cheap. Sweep w from −1 to 2. Later: medium vs small, base vs post-trained.', listen:'"Music minus foley-ness" or "plus SFX texture", an axis no prompt can express.', needs:'Small-SFX'},
+   {id:'3.4', t:'Skip-layer / perturbed-attention guidance', gate:[], do:'Guide away from a self-damaged copy of the model: skip block k, or replace its self-attention with identity. Sweep k and the sign of w. Works at CFG 1.', listen:'Positive w sharpens structure. Negative w gives layer-specific smearing and "forgetting".', needs:'a hook in our DiT subclass'},
+   {id:'3.5', t:'DiT network bending', gate:[], do:'Insert ops into block k\'s hidden states (frames × channels): time-roll, reverse, dilate, permute channels, gate by another track\'s envelope.', listen:'An FX rack inside the model. Early blocks should change meaning, late blocks act more like filters.', needs:'a hook in our DiT subclass'},
+   {id:'3.6', t:'AudEdit (FlowEdit for audio)', star:true, gate:['B'], do:'No inversion: at each step, noise the source to t, run source and target prompts, and integrate the velocity difference onto the edit. The paper (arXiv 2606.15149) used SA3-medium, 28 steps, n_max 24 as the "how much to rewrite" dial.', listen:'Genre or instrument swaps that keep the groove and arrangement far better than plain audio-to-audio.', needs:'Medium'},
+   {id:'3.7', t:'Best-of-N for weird', gate:[], do:'Render 32 seeds per prompt (cheap at 8 steps) and score them by a mix like <i>low</i> CLAP similarity to the genre plus high aesthetics.', listen:'Searching for strange instead of correct.', needs:'a CLAP model install'},
+   {id:'3.8', t:'Noise optimisation (stretch)', gate:[], do:'Use <code>mx.grad</code> through the 8-step sampler to the starting noise, against a target loudness curve or beat grid (DITTO-style).', listen:'Draw a curve and the model finds a seed that obeys it. Memory is the open risk.', needs:'memory headroom'},
+  ]},
+ {id:'P4', c:'--p4', name:'Light training on the Mac', goal:'Change the weights a little, all locally in MLX. The <code>-base</code> checkpoints are the ones to train on. LoRAs trained on base also work on the fast post-trained model at inference.',
+  deliv:'<b>Deliverable:</b> at least one adapter or merge that carries your own sound, usable with <code>./sa3 --lora</code>.',
+  items:[
+   {id:'4.1', t:'Base / post-trained weight merge', star:true, gate:['C'], do:'Average the base and post-trained DiT weights (the community uses 1 : 2) directly in the <code>.npz</code> files, then sweep the ratio 0 → 1 as a timbre knob.', listen:'Reported to remove the "SA3 crunch" and tolerate CFG 3+. Check whether it opens up the high-CFG corners from P1.1.', needs:'a -base DiT'},
+   {id:'4.2', t:'Own steering vectors', gate:[], do:'Take the mean activation difference at one DiT block between two clip sets (your catalogue vs stock renders). Add it at scale 0.1–0.3 in late steps only. Block 14 is a good first pick: SA3\'s training discriminator found it semantically rich.', listen:'A custom knob without training a LoRA, which could later be mapped to a MIDI controller.', needs:'two clip sets'},
+   {id:'4.3', t:'LoRA on your own material', star:true, gate:['C'], do:'Use 30+ min of one coherent style with <code>lora_train_mlx.py</code> (or the underfit dashboard on MLX): rank 16, dora-rows, random latent crops. Around 10k steps a LoRA "creatively underfits", so pick the checkpoint at the loss-curve elbow.', listen:'Your sound instead of the dataset average.', needs:'your material'},
+   {id:'4.4', t:'Overfit remix engine + step-gated stacking', gate:['C'], do:'Train past memorisation on purpose, then run audio-to-audio on someone else\'s track with <code>--lora overfit.safetensors strength=0.5 steps=2-</code>. Stack two LoRAs: A on steps 1–3 for composition, B on 4–8 for texture.', listen:'Any input re-sung in your material.', needs:'a trained LoRA'},
+   {id:'4.5', t:'Sparse autoencoder on SAME latents', gate:[], do:'Train an SAE on a few hours of 256-dim latents (trivial on the Mac), then auto-label features with the chroma probe and CLAP.', listen:'A mixer of interpretable sliders instead of one probe direction.', needs:'a latent corpus'},
+   {id:'4.6', t:'Single-instrument decoder', gate:[], do:'Freeze the SAME encoder and finetune the decoder (or a decoder LoRA) on 1–2 h of one timbre.', listen:'Encode anything, decode it as cello or gamelan.', needs:'Modal go-ahead'},
+  ]},
+ {id:'P5', c:'--p5', name:'New control — the designed extension slot', goal:'SA3 was built with a zero-initialised slot for frame-aligned control signals (<code>modular_local_cond</code>). It is added in every DiT block exactly like the inpaint signal, and it does nothing until trained. The MLX DiT doesn\'t implement it yet, so this phase starts with a port.',
+  deliv:'<b>Deliverable:</b> a trained control adapter that makes SA3 follow a curve you draw, plus one render driven by a non-musical signal.',
+  items:[
+   {id:'5.1', t:'Port the control slot to MLX', gate:[], do:'Subclass the MLX DiT in <code>sa3lab/</code> to add a zero-init 2-layer MLP per block that takes a <code>(B, channels, frames)</code> signal at ≈ 10.77 Hz, mirroring <code>stable_audio_3/models/transformer.py</code>.', listen:'Verify output is bit-identical to stock when the MLP is untrained.', needs:'nothing'},
+   {id:'5.2', t:'Train it on chroma / beats / loudness', gate:['C'], do:'Extract frame-aligned features from training clips (the chroma probe from P2.5, <code>beat_this</code> beats, RMS) and train the adapter on a -base DiT with the MLX trainer.', listen:'Whether a drawn loudness curve or chord sequence actually steers the output.', needs:'a -base DiT, a dataset'},
+   {id:'5.3', t:'Feed it signals that aren\'t music', gate:[], do:'Once trained, feed it video motion energy, a stock chart, sensor or EEG data as if it were the control signal.', listen:'Music that follows the shape of something outside music.', needs:'5.2'},
+   {id:'5.4', t:'Cheaper path: latent control heads', gate:[], do:'Train a small (~7M-param) head that predicts intensity, pitch or beats from latents, and use its gradient to guide selected sampling steps (LatCH, by the SA3 team). The DiT is never trained.', listen:'Frame-level control without touching the DiT.', needs:'a labelled latent set'},
+  ]},
+ {id:'P6', c:'--p6', name:'Beyond SA3 — chaining other models', goal:'SA3 has no vocals, no real-time mode and no symbolic control. Other models fill those gaps, and SA3 becomes one stage in a pipeline.',
+  deliv:'<b>Deliverable:</b> one pipeline that no single model could produce, e.g. a live Magenta RT 2 jam driven by SA3 renders.',
+  items:[
+   {id:'6.1', t:'Analysis + separation toolkit', star:true, gate:['D'], do:'Install python-audio-separator (Demucs / RoFormer stems), <code>beat_this</code> (beats + downbeats) and <code>basic-pitch</code> (audio → MIDI). These enable P2.6, P5.2, sketch-to-render and per-stem re-renders.', listen:'n/a. These are enablers.', needs:'small pip installs'},
+   {id:'6.2', t:'Magenta RealTime 2 — play it live', star:true, gate:[], do:'The only open model you can play live, and it runs natively in MLX. Use SA3 renders as its audio style prompts, morph between two of them live, then bounce takes back to SA3 for continuation.', listen:'SA3\'s offline quality combined with real-time playing.', needs:'new install'},
+   {id:'6.3', t:'ACE-Step 1.5 for vocals', gate:['D'], do:'Generate a vocal song in ACE-Step, separate it, and re-render only the instrumental through SA3 audio-to-audio at noise 0.3–0.5.', listen:'Vocals SA3 can\'t make, over SA3-quality instrumentals.', needs:'new install'},
+   {id:'6.4', t:'Imaginary-instrument RAVE', gate:[], do:'Generate ~3 h of one invented instrument with SA3, train RAVE on it, and play it in real time through <code>nn~</code> in Max.', listen:'A playable instrument that never existed.', needs:'Max, RAVE install'},
+   {id:'6.5', t:'DAW surface', gate:[], do:'The repo already ships an Ableton bridge (<code>optimized/mlx/ableton/</code>, a Remote Script that drops <code>./sa3</code> renders at the playhead). Wire <code>sa3lab</code> scripts into it so every trick is one keystroke from Live.', listen:'Whether the tricks hold up inside a real arrangement.', needs:'Ableton'},
+   {id:'6.6', t:'Token-rate playground', gate:[], do:'At 10.8 frames/s a 3-minute song is only ~1,900 SAME frames, short enough for a small autoregressive model over latents. Train one on a latent corpus for long-form structure.', listen:'Whether an LM over latents learns song form that the DiT doesn\'t.', needs:'a latent corpus'},
+  ]},
+];
+
+const root = document.getElementById('phases');
+const KEY = 'sa3plan:';
+function render(){
+  let total=0, done=0;
+  root.innerHTML = PHASES.map(p=>{
+    const cards = p.items.map(it=>{
+      const k = KEY+it.id; const chk = localStorage.getItem(k)==='1'; total++; if(chk) done++;
+      const gates = it.gate.length ? it.gate.map(g=>`<span class="pill gate">gate ${g}</span>`).join('') : '<span class="pill free">on disk</span>';
+      return `<div class="card${chk?' done':''}" style="--c:var(${p.c})">
+        ${it.star?'<span class="star pill rec">start here</span>':''}
+        <div class="hd"><input type="checkbox" data-k="${k}" ${chk?'checked':''} title="mark done">
+          <div><div class="id">${it.id} ${gates}</div><div class="t">${it.t}</div></div></div>
+        <dl><dt>Do</dt><dd>${it.do}</dd><dt>Listen</dt><dd>${it.listen}</dd><dt>Needs</dt><dd>${it.needs}</dd></dl>
+        ${it.cmd?`<pre><code>${it.cmd}</code></pre>`:''}
+      </div>`;}).join('');
+    return `<section class="phase" style="--c:var(${p.c})"><h2>${p.id} · ${p.name}</h2>
+      <p class="goal">${p.goal}</p><p class="deliv">${p.deliv}</p><div class="cards">${cards}</div></section>`;
+  }).join('');
+  document.getElementById('progress').textContent = `${done} / ${total} experiments done`;
+  root.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.onchange=()=>{localStorage.setItem(cb.dataset.k, cb.checked?'1':'0'); render();});
+}
+render();
+</script>
+</body>
+</html>

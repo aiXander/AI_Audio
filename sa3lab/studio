@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SA3 Studio: dark skin over upstream's MLX gradio UI, localhost only.
+#   sa3lab/studio                 # medium + same-l on http://127.0.0.1:7860
+#   sa3lab/studio --dit sm-music  # any upstream sa3_gradio.py flag passes through
+set -e
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Every SA3 download lands in AI_Audio/models/ (one folder to delete to reclaim disk).
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HERE/../models/hf-cache}"
+exec "$HERE/../stable-audio-3/optimized/mlx/.venv/bin/python" "$HERE/studio.py" "$@"
