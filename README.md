@@ -16,6 +16,12 @@ Weights, datasets and renders are not in git (`models/`, `audio-data/`, `outputs
 git clone --recurse-submodules https://github.com/aiXander/AI_Audio.git
 cd AI_Audio
 git submodule foreach 'git checkout main'   # submodules clone detached; put them on a branch before committing
+
+# one-time, so you can pull upstream updates and push over SSH
+( cd stable-audio-3 && git remote add upstream https://github.com/Stability-AI/stable-audio-3.git \
+    && git remote set-url --push upstream DISABLED && git remote set-url origin git@github.com:aiXander/stable-audio-3.git )
+( cd underfit && git remote add upstream https://github.com/dada-bots/underfit.git \
+    && git remote set-url --push upstream DISABLED && git remote set-url origin git@github.com:aiXander/underfit.git )
 ```
 
 ## Sync between machines
