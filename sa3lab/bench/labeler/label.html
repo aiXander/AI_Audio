@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blind listening</title>
+<style>
+  :root { --bg:#0c0c0d; --panel:#151517; --line:#2a2a2e; --text:#ece9e2; --dim:#8d8b86; --light:#fff3d6;
+          --good:#b6e36b; --bad:#ff7a6b; --mono: ui-monospace,"SF Mono",Menlo,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 -apple-system,"Helvetica Neue",sans-serif; }
+  button { font:inherit; color:inherit; background:none; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--line);
+           display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; padding:10px 20px; }
+  h1 { font:600 14px var(--mono); letter-spacing:.08em; margin:0; text-transform:uppercase; }
+  #progress, #saved, #keys, .hint { font:12px var(--mono); color:var(--dim); }
+  #saved { margin-left:auto; }
+  #saved.bad { color:#111; background:var(--bad); padding:3px 8px; border-radius:4px; font-weight:600; }
+  #keys { flex-basis:100%; font-size:11px; } kbd { font:inherit; color:var(--text); }
+  label.tog { font:12px var(--mono); color:var(--dim); display:flex; gap:6px; align-items:center; cursor:pointer; }
+  #reveal { padding:3px 12px; font-size:12px; }
+  #reveal.arm { background:var(--bad); color:#111; border-color:var(--bad); font-weight:600; }
+  #direction { display:block; width:calc(100% - 40px); margin:16px 20px 0; min-height:44px; resize:vertical; padding:8px 10px;
+               background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; font:inherit; }
+  section { padding:18px 20px 4px; }
+  section h2 { font:600 13px var(--mono); text-transform:uppercase; letter-spacing:.06em; margin:0 0 4px; }
+  section .prompt { color:#c9c6bf; margin-bottom:12px; max-width:1100px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px 11px; outline:none; }
+  .card.focus { border-color:var(--light); box-shadow:0 0 0 1px var(--light); }
+  .card.playing .title::after { content:" ▶"; color:var(--light); }
+  .title { font-weight:600; display:flex; justify-content:space-between; gap:8px; }
+  .title .rev { font:11px var(--mono); color:var(--light); text-align:right; }
+  audio { width:100%; height:34px; margin-top:8px; }
+  .stars { display:flex; gap:3px; margin-top:8px; }
+  .stars button { width:100%; padding:3px 0; font:12px var(--mono); color:var(--dim); }
+  .stars button.on { background:var(--light); border-color:var(--light); color:#111; font-weight:600; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+  .chips button { padding:1px 8px; font-size:11px; border-radius:10px; color:var(--dim); }
+  .chips button.on { color:#111; background:var(--text); border-color:var(--text); }
+  .chips button.neg.on { background:var(--bad); border-color:var(--bad); }
+  .note { display:block; width:100%; margin-top:8px; padding:5px 7px; background:var(--bg); color:var(--text);
+          border:1px solid var(--line); border-radius:4px; font:13px inherit; }
+  #results { display:none; padding:18px 20px 60px; }
+  #results.open { display:block; }
+  #results h2 { font:600 13px var(--mono); text-transform:uppercase; letter-spacing:.06em; margin:22px 0 8px; }
+  table { border-collapse:collapse; font:12px var(--mono); }
+  th, td { border-bottom:1px solid var(--line); padding:5px 10px; text-align:right; white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:400; }
+  td.pos { color:var(--good); } td.neg { color:var(--bad); }
+  .bar { display:inline-block; height:8px; background:var(--light); vertical-align:middle; margin-left:6px; border-radius:2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <span id="progress"></span>
+  <label class="tog"><input type="checkbox" id="sync" checked> keep position when switching clips</label>
+  <button id="reveal">Reveal results</button>
+  <span id="saved"></span>
+  <div id="keys">click a card to focus · <kbd>space</kbd> play/pause · <kbd>←/→</kbd> prev/next clip (same timestamp) ·
+    <kbd>1–5</kbd> score · clips are loudness-matched; names and order are random</div>
+</header>
+<textarea id="direction" placeholder="Overall impressions (free text)"></textarea>
+<div id="groups"></div>
+<div id="results"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let labels = {}, direction = "", items = [], chips = [], negChips = [], cards = new Map(), order = [];
+let focused = null, lastPos = {}, revealed = null, saveTimer = null, dirty = false;
+const label = id => labels[id] || (labels[id] = { score: null, works: [], note: "" });
+const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n; };
+
+function setStatus(t, bad) { $("saved").textContent = t; $("saved").classList.toggle("bad", !!bad); }
+function persist() { dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 250); renderProgress(); }
+async function saveNow() {
+  const real = Object.entries(labels).filter(([, l]) => l.score != null || l.works.length || l.note);
+  dirty = false;
+  try {
+    const r = await fetch("/api/labels", { method: "POST", body: JSON.stringify({ direction, labels: Object.fromEntries(real) }, null, 2) });
+    if (!r.ok) throw 0;
+    setStatus("saved to labels.json " + new Date().toLocaleTimeString());
+  } catch { dirty = true; setStatus("NOT SAVING: server is off. Run: uv run --no-project serve.py in this folder", true); }
+}
+setInterval(() => { if (dirty) saveNow(); }, 3000);
+
+function renderProgress() {
+  const n = items.filter(i => labels[i.id] && labels[i.id].score != null).length;
+  $("progress").textContent = `${n}/${items.length} scored`;
+}
+
+function focusCard(id, play) {
+  if (focused) cards.get(focused)?.node.classList.remove("focus");
+  focused = id;
+  const c = cards.get(id); if (!c) return;
+  c.node.classList.add("focus");
+  c.node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (play) c.audio.play();
+}
+
+function buildCard(it, n) {
+  const l = label(it.id);
+  const node = el("div", "card"); node.tabIndex = 0;
+  const title = el("div", "title"); title.append(el("span", "", `Clip ${n}`), el("span", "rev"));
+  const audio = el("audio"); audio.controls = true; audio.preload = "metadata"; audio.src = it.audio;
+  audio.addEventListener("play", () => {
+    for (const [id, c] of cards) if (id !== it.id && !c.audio.paused) { lastPos[it.group] = c.audio.currentTime; c.audio.pause(); }
+    if ($("sync").checked && lastPos[it.group] != null && Math.abs(audio.currentTime - lastPos[it.group]) > 0.3
+        && lastPos[it.group] < (audio.duration || 1e9) - 0.5) audio.currentTime = lastPos[it.group];
+    node.classList.add("playing"); if (focused !== it.id) focusCard(it.id);
+  });
+  audio.addEventListener("pause", () => { node.classList.remove("playing"); lastPos[it.group] = audio.currentTime; });
+  audio.addEventListener("timeupdate", () => { if (!audio.paused) lastPos[it.group] = audio.currentTime; });
+  const stars = el("div", "stars");
+  const starBtns = [1, 2, 3, 4, 5].map(s => {
+    const b = el("button", "", s); b.onclick = () => setScore(it.id, s); stars.append(b); return b;
+  });
+  const chipBox = el("div", "chips");
+  const chipBtns = chips.map(ch => {
+    const b = el("button", negChips.includes(ch) ? "neg" : "", ch);
+    b.onclick = () => { const w = label(it.id).works; const i = w.indexOf(ch); i < 0 ? w.push(ch) : w.splice(i, 1); paint(it.id); persist(); };
+    chipBox.append(b); return b;
+  });
+  const note = el("input", "note"); note.placeholder = "note"; note.value = l.note || "";
+  note.oninput = () => { label(it.id).note = note.value; persist(); };
+  node.append(title, audio, stars, chipBox, note);
+  node.addEventListener("mousedown", () => { if (focused !== it.id) focusCard(it.id); });
+  cards.set(it.id, { node, audio, starBtns, chipBtns, title, it });
+  paint(it.id);
+  return node;
+}
+
+function paint(id) {
+  const c = cards.get(id), l = label(id);
+  c.starBtns.forEach((b, i) => b.classList.toggle("on", l.score === i + 1));
+  c.chipBtns.forEach(b => b.classList.toggle("on", l.works.includes(b.textContent)));
+  const k = revealed && revealed.key[id];
+  c.title.querySelector(".rev").textContent = k ? `${k.label} · ${k.decoder}` : "";
+}
+
+function setScore(id, s) { const l = label(id); l.score = l.score === s ? null : s; paint(id); persist(); }
+
+function render() {
+  const box = $("groups"); box.innerHTML = ""; cards.clear(); order = [];
+  const groups = [];
+  for (const it of items) { let g = groups.find(g => g.id === it.group); if (!g) groups.push(g = { id: it.group, prompt: it.prompt, items: [] }); g.items.push(it); }
+  for (const g of groups) {
+    const s = el("section"); s.append(el("h2", "", `${g.id} — ${g.items.length} clips`), el("div", "prompt", g.prompt));
+    const grid = el("div", "grid");
+    g.items.forEach((it, i) => { grid.append(buildCard(it, i + 1)); order.push(it.id); });
+    s.append(grid); box.append(s);
+  }
+  renderProgress();
+}
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || !focused) return;
+  if (e.target.tagName === "AUDIO") e.target.blur();
+  const c = cards.get(focused);
+  if (e.key >= "1" && e.key <= "5") { setScore(focused, +e.key); e.preventDefault(); }
+  else if (e.key === " ") { c.audio.paused ? c.audio.play() : c.audio.pause(); e.preventDefault(); }
+  else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    const wasPlaying = !c.audio.paused;
+    const g = c.it.group, ids = order.filter(id => cards.get(id).it.group === g);
+    let i = ids.indexOf(focused) + (e.key === "ArrowRight" ? 1 : -1);
+    i = (i + ids.length) % ids.length;
+    if (wasPlaying) { lastPos[g] = c.audio.currentTime; c.audio.pause(); }
+    focusCard(ids[i], wasPlaying); e.preventDefault();
+  }
+});
+
+// ---------- reveal ----------
+let armTimer;
+$("reveal").onclick = async () => {
+  const b = $("reveal");
+  if (revealed) {
+    const showRes = !$("results").classList.contains("open");
+    if (showRes) renderResults();
+    $("results").classList.toggle("open", showRes); $("groups").style.display = showRes ? "none" : "";
+    b.textContent = showRes ? "Show clips (un-blinded)" : "Show results"; window.scrollTo(0, 0); return;
+  }
+  if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Click again: un-blinds all clips"; clearTimeout(armTimer);
+    armTimer = setTimeout(() => { b.classList.remove("arm"); b.textContent = "Reveal results"; }, 4000); return; }
+  b.classList.remove("arm");
+  revealed = await (await fetch("/api/reveal")).json();
+  b.textContent = "Show clips (un-blinded)";
+  items.forEach(i => paint(i.id));
+  renderResults(); $("groups").style.display = "none"; $("results").classList.add("open"); window.scrollTo(0, 0);
+};
+
+const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+const f = (v, d = 2) => v == null ? "–" : v.toFixed(d);
+const sgn = (v, d = 2) => v == null ? "–" : (v > 0 ? "+" : "") + v.toFixed(d);
+const cls = v => v == null || Math.abs(v) < 1e-9 ? "" : v > 0 ? "pos" : "neg";
+
+function renderResults() {
+  const { key, auto } = revealed, R = $("results"); R.innerHTML = "";
+  const rows = items.map(it => ({ id: it.id, ...key[it.id], score: labels[it.id]?.score ?? null, tags: labels[it.id]?.works || [], note: labels[it.id]?.note || "", auto: auto[it.id] || {} }));
+  const find = (p, c, d) => rows.find(r => r.prompt === p && r.config === c && r.decoder === d);
+  const variants = [...new Set(rows.map(r => r.config + "|" + r.decoder))];
+  const prompts = [...new Set(rows.map(r => r.prompt))];
+  const aut = ["PQ", "CE", "clap", "tonality_p95_dB", "air_16_22_dB"];
+  const hasAuto = rows.some(r => r.auto.PQ != null);
+
+  R.append(el("h2", "", "Your blind scores per variant (mean over prompts; Δ = paired vs baseline · stock decoder)"));
+  const t = el("table"); const head = ["variant", "decoder", "your score", "Δ vs baseline", "scored", ...prompts, "tags"];
+  if (hasAuto) head.push("PQ", "CE", "CLAP", "squeak p95 dB", "air 16-22k dB");
+  t.innerHTML = "<tr>" + head.map(h => `<th>${h}</th>`).join("") + "</tr>";
+  const stats = variants.map(v => {
+    const [c, d] = v.split("|"), rs = rows.filter(r => r.config === c && r.decoder === d);
+    const sc = rs.filter(r => r.score != null);
+    const deltas = sc.map(r => { const b = find(r.prompt, "A_baseline", "stock"); return b && b.score != null ? r.score - b.score : null; }).filter(x => x != null);
+    const tags = {}; rs.forEach(r => r.tags.forEach(x => tags[x] = (tags[x] || 0) + 1));
+    return { c, d, label: rs[0].label, rs, m: mean(sc.map(r => r.score)), dm: mean(deltas), n: sc.length, tags,
+             a: Object.fromEntries(aut.map(k => [k, mean(rs.map(r => r.auto[k]).filter(x => x != null))])) };
+  }).sort((x, y) => (y.m ?? -9) - (x.m ?? -9));
+  for (const s of stats) {
+    const tr = el("tr");
+    const cells = [s.label, s.d, `${f(s.m)}<span class="bar" style="width:${(s.m || 0) * 14}px"></span>`,
+      `<td class="${cls(s.dm)}">${s.c === "A_baseline" && s.d === "stock" ? "ref" : sgn(s.dm)}</td>`, `${s.n}/${s.rs.length}`,
+      ...prompts.map(p => { const r = s.rs.find(r => r.prompt === p); return r && r.score != null ? r.score : "–"; }),
+      Object.entries(s.tags).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join(" ")];
+    if (hasAuto) cells.push(f(s.a.PQ), f(s.a.CE), f(s.a.clap, 3), f(s.a.tonality_p95_dB, 1), f(s.a.air_16_22_dB, 1));
+    tr.innerHTML = cells.map(x => String(x).startsWith("<td") ? x : `<td>${x}</td>`).join(""); t.append(tr);
+  }
+  R.append(t);
+
+  R.append(el("h2", "", "Squeakfix decoder LoRA: paired effect on identical latents (squeakfix − stock)"));
+  const t2 = el("table"); t2.innerHTML = "<tr><th>variant</th>" + prompts.map(p => `<th>${p}</th>`).join("") + "<th>mean Δ</th></tr>";
+  for (const c of [...new Set(rows.map(r => r.config))]) {
+    const ds = prompts.map(p => { const a = find(p, c, "stock"), b = find(p, c, "squeakfix"); return a && b && a.score != null && b.score != null ? b.score - a.score : null; });
+    const tr = el("tr"); const m = mean(ds.filter(x => x != null));
+    tr.innerHTML = `<td>${rows.find(r => r.config === c).label}</td>` + ds.map(x => `<td class="${cls(x)}">${sgn(x, 0)}</td>`).join("") + `<td class="${cls(m)}">${sgn(m)}</td>`;
+    t2.append(tr);
+  }
+  R.append(t2);
+
+  const notes = rows.filter(r => r.note);
+  if (notes.length) {
+    R.append(el("h2", "", "Your notes"));
+    const t3 = el("table"); t3.innerHTML = "<tr><th>prompt</th><th>variant</th><th>decoder</th><th>score</th><th style='text-align:left'>note</th></tr>";
+    notes.forEach(r => { const tr = el("tr"); tr.innerHTML = `<td>${r.prompt}</td><td>${r.label}</td><td>${r.decoder}</td><td>${r.score ?? "–"}</td><td style="text-align:left;white-space:normal">${r.note.replace(/</g, "&lt;")}</td>`; t3.append(tr); });
+    R.append(t3);
+  }
+  R.append(el("p", "hint", "Press the button at the top to see the clips with their variant names (you can keep re-scoring; results refresh). Labels stay in labels.json."));
+}
+
+async function sync() {
+  try {
+    const [cfg, its] = await Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/items").then(r => r.json())]);
+    if (!items.length) {
+      const lb = await fetch("/api/labels").then(r => r.json());
+      labels = lb.labels || {}; direction = lb.direction || ""; $("direction").value = direction;
+      $("title").textContent = cfg.title; document.title = cfg.title; chips = cfg.chips || []; negChips = cfg.neg_chips || [];
+    }
+    if (its.map(i => i.id).join() !== items.map(i => i.id).join()) { items = its; render(); }
+  } catch { setStatus("NOT SAVING: server is off. Run: uv run --no-project serve.py in this folder", true); }
+}
+$("direction").oninput = e => { direction = e.target.value; persist(); };
+sync(); setInterval(sync, 5000);
+</script>
+</body>
+</html>

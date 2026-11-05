@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.10,<3.13"
 # dependencies = ["numpy", "scipy", "soundfile", "pyloudnorm", "torch", "torchaudio",
-#                 "transformers", "audiobox_aesthetics"]
+#                 "transformers", "audiobox_aesthetics", "requests"]
 # ///
 """SA3 quality-trick benchmark — scoring half.
 
@@ -117,6 +117,12 @@ def main():
             lines.append(f"- {c} / {d}: PQ {r['PQ']:.2f}, CE {r['CE']:.2f}, clap {r['clap']:.3f}, "
                          f"ton95 {r['tonality_p95_dB']:.1f}, air16-22 {r['air_16_22_dB']:.1f}")
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
+    key_path = OUT / "listen" / "blind_key.json"
+    if key_path.exists():  # machine scores per blind clip, shown on the page after Reveal
+        by_file = {r["file"]: r for r in rows}
+        auto = {clip: {m: by_file[k["file"]][m] for m in metrics} for clip, k in json.loads(key_path.read_text()).items()
+                if k["file"] in by_file}
+        (OUT / "listen" / "autoscores.json").write_text(json.dumps(auto, indent=1))
     print("\n".join(lines))
 
 
