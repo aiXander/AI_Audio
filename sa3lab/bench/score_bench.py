@@ -8,7 +8,7 @@
 Scores every wav listed in outputs/sa3_bench_quality/manifest.json:
   Audiobox Aesthetics (Meta, no-reference, 1-10): PQ production quality, PC production
       complexity, CE content enjoyment, CU content usefulness.
-  CLAP (laion/larger_clap_music): cosine between the clip (mean of 10 s windows) and the
+  CLAP (laion/clap-htsat-unfused): cosine between the clip (mean of 10 s windows) and the
       descriptive prompt — always the descriptive one, also for tag-prompt renders.
   Signal: level of 12-16 / 16-22 kHz relative to the full band ("air"); HF tonality in
       6-18 kHz (peak-over-median per STFT frame, the squeak measure from the squeakfix
@@ -66,8 +66,8 @@ def main():
     from audiobox_aesthetics.infer import initialize_predictor
     aes = initialize_predictor()
     from transformers import ClapModel, ClapProcessor
-    clap = ClapModel.from_pretrained("laion/larger_clap_music").eval()
-    proc = ClapProcessor.from_pretrained("laion/larger_clap_music")
+    clap = ClapModel.from_pretrained("laion/clap-htsat-unfused").eval()
+    proc = ClapProcessor.from_pretrained("laion/clap-htsat-unfused")
 
     rows = []
     for i, r in enumerate(files):
