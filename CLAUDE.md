@@ -25,6 +25,7 @@ Each model lives in its own subfolder with its own `CLAUDE.md`. This file covers
 |---|---|
 | [stable-audio-3/CLAUDE.md](stable-audio-3/CLAUDE.md) | working with Stable Audio 3 or its SAME-L audio codec (local MLX runtime, LoRA training) |
 | [underfit/README.md](underfit/README.md) | finetuning SA3 (LoRA/DoRA) on our own audio — dadabots' training dashboard; dataset prep, prompt config, training knobs. Training runs on Xander's NVIDIA GPU box (or cloud), never on this Mac (too slow) |
+| [underfit/docs/TODO/sa3-lora-finetune.md](underfit/docs/TODO/sa3-lora-finetune.md) | starting or continuing our first SA3 finetune: data and caption findings, chosen run config, next steps, known traps |
 | `sa3lab/` (`studio.py`, `hispec.py`, `persist.py` docstrings) | changing the web UI, its spectrogram, or adding our own SA3 scripts |
 | `sa3lab/bench/` (`quality_bench.py`, `score_bench.py` docstrings) | comparing SA3 quality tricks (base/ARC merge, CFG, squeakfix decoder LoRA, length, prompt style) on fixed prompts + seeds, scoring renders (Audiobox Aesthetics, CLAP, HF/squeak metrics), and the blind A/B listening page (`make_listen.py` + `labeler/`, adapted from the labeling-ui skill: loudness-matched, randomly named clips, Reveal button un-blinds) |
 | SAME-L / SA3 research Claude Doc: https://claude.ai/artifact/DypQNkdfui1FG9pJosuHu7 | Xander shares a link, paper or idea about these models, or an experiment produced a result worth logging — append there, not in a repo file |
