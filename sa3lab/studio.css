@@ -11,13 +11,11 @@ body::after { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events
   background: radial-gradient(75% 85% at 50% 50%, rgba(9,9,13,0.55) 0%, rgba(9,9,13,0.38) 65%, rgba(5,5,8,0.5) 100%); }
 gradio-app { position: relative; z-index: 1; background: transparent !important; }
 gradio-app, .gradio-container, .gradio-container > .main, .gradio-container .contain, .app { background: transparent !important; }
-/* panels go slightly glassy so the light reads through */
-.block, .form, .sa3-stats { backdrop-filter: blur(26px) saturate(0.7); }
-/* backdrop-filter makes an element the containing block of position:fixed children, so
-   gradio's dropdown list (fixed) got trapped and clipped inside its panel: drop the blur
-   on a panel only while one of its dropdowns is open */
-.block:has(input[aria-expanded="true"]), .form:has(input[aria-expanded="true"]) { backdrop-filter: none; }
-.block:not(.sa3-player):not(.sa3-timing):not(.sa3-error):not(.sa3-queued):not(.sa3-history):not(.sa3-header):not(.sa3-footer):not(.sa3-sec-wrap):not(.sa3-lora-file):not(.sa3-lora-str):not(.sa3-lora-step):not(.sa3-lora-dd) { background: rgba(17,17,23,0.86) !important; }
+/* panels are near-opaque fills, deliberately NOT backdrop-filter blur: the background
+   canvas repaints continuously and every repaint re-ran a 26px blur behind each of ~33
+   panels (Chrome's GPU process at ~40% CPU on an idle page). The fills below approximate
+   what the old blur-over-dim-canvas looked like. */
+.block:not(.sa3-player):not(.sa3-timing):not(.sa3-error):not(.sa3-queued):not(.sa3-history):not(.sa3-header):not(.sa3-footer):not(.sa3-sec-wrap):not(.sa3-lora-file):not(.sa3-lora-str):not(.sa3-lora-step):not(.sa3-lora-dd) { background: rgba(17,17,23,0.92) !important; }
 /* gradio's overflow:hidden here turns the container into a scroll box, which silently
    disables position:sticky for the top bar (#sa3-top) and output column; clip doesn't */
 .gradio-container { overflow: visible !important; overflow-x: clip !important; }
@@ -87,16 +85,17 @@ button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
 #sa3-generate[data-q]::after { content: "⌘↵  ·  +" attr(data-q) " queued"; opacity: .85; }
 
 /* sticky top line above the 40/60 columns (built by studio.py _layout): logo | Generate
-   (dead centre, full bar height) | auto-play toggle + Library. While a render runs, Stop and
+   (dead centre, 44px tall, sets the bar height) | auto-play toggle + Library. While a render runs, Stop and
    the progress text float either side of Generate (absolute, so it never moves) and the
    progress track runs along the button's bottom edge. */
 #sa3-top { position: sticky; top: 0; z-index: 30; align-items: center !important; flex-wrap: nowrap !important; gap: 16px !important;
-  margin: 0 -14px 12px !important; width: calc(100% + 28px) !important; padding: 6px 14px !important; border-radius: 0 0 16px 16px;   /* width: the -14px bleed on both sides, so the centre is the page centre */
+  margin: 0 -14px 12px !important; width: calc(100% + 28px) !important; padding: 0 14px !important; border-radius: 0 0 16px 16px;   /* width: the -14px bleed on both sides, so the centre is the page centre */
   background: rgba(9,9,13,0.66) !important; backdrop-filter: blur(16px); border-bottom: 1px solid rgba(255,255,255,0.05); }
 #sa3-top > .sa3-header { flex: 1 1 0 !important; min-width: 0 !important; }
 /* header (left) and #sa3-right (auto-play + Library) take equal flex shares, so Generate sits dead centre */
 #sa3-top > #sa3-right { flex: 1 1 0 !important; min-width: 0 !important; justify-content: flex-end !important; align-items: center !important;
-  flex-wrap: nowrap !important; gap: 14px !important; margin: 0 !important; padding: 0 !important; background: none !important; border: none !important; }
+  flex-wrap: nowrap !important; gap: 14px !important; margin: 0 !important; background: none !important; border: none !important;
+  padding: 0 0 0 110px !important; }   /* left 110px = Stop's slot (96px + 10px gap, absolute right of Generate): nothing in here may slide under it */
 #sa3-right > .form, #sa3-right > .block { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
   background: none !important; border: none !important; backdrop-filter: none; }
 #sa3-top .sa3h { padding: 0; flex-wrap: nowrap; }
@@ -105,14 +104,18 @@ button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
 #sa3-top .sa3h-name { font-size: 16px; }
 #sa3-top .sa3h-tag { font-size: 11px; margin-top: 0; }
 #sa3-actions { position: relative; justify-content: center !important; overflow: visible !important;
-  flex: 0 0 auto !important; align-self: stretch !important; align-items: stretch !important; flex-wrap: nowrap !important; gap: 12px !important; margin: 0 !important; padding: 0 !important;
+  flex: 0 0 auto !important; align-self: center !important; height: 44px !important; align-items: stretch !important; flex-wrap: nowrap !important; gap: 12px !important; margin: 0 !important; padding: 0 !important;
   width: auto !important; background: none !important; border: none !important; }
 #sa3-actions #sa3-generate { min-height: 32px !important; height: auto !important; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 14.5px !important; border-radius: 10px !important; }
-#sa3-actions > #sa3-generate { flex: 0 0 320px !important; min-width: 0 !important; }   /* full bar height (stretch), fixed width */
+#sa3-actions > #sa3-generate { flex: 0 0 320px !important; min-width: 0 !important; }   /* fills #sa3-actions' 44px; the bar has no vertical padding, so it hugs the button, fixed width */
 #sa3-actions > .form, #sa3-actions > .block { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
   background: none !important; border: none !important; backdrop-filter: none; }
 #sa3-autoplay label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a3a3b5; white-space: nowrap; cursor: pointer; padding: 0 4px; }
-#sa3-autoplay input { margin: 0 !important; }
+#sa3-autoplay input { margin: 0 !important; flex: none; }
+/* when the bar gets tight the auto-play label is what gives way (ellipsis), never the buttons */
+#sa3-right > :has(#sa3-autoplay), #sa3-autoplay { flex: 0 1 auto !important; min-width: 0 !important; overflow: hidden; }
+#sa3-autoplay label { min-width: 0; }
+#sa3-autoplay label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #sa3-out > * { min-width: 0; }
 /* hide via body:not(): gradio re-emits every rule with a .gradio-container
    prefix, so a plain "#sa3-stop{display:none}" would outrank the busy rule */
@@ -127,7 +130,7 @@ body.sa3-busy #sa3-stop:hover { background: rgba(255,90,110,0.16) !important; bo
 
 /* ── output column ────────────────────────────────── */
 /* the newest clip's card (.sa3-player) + the history are one list: the sticky column scrolls as a whole */
-#sa3-out { position: sticky; top: 66px; align-self: flex-start; max-height: calc(100vh - 78px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+#sa3-out { position: sticky; top: 56px; align-self: flex-start; max-height: calc(100vh - 68px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
 #sa3-out { flex-wrap: nowrap !important; }   /* with a max-height, a wrapping column would push the history into an off-screen 2nd column */
 #sa3-out > * { flex-shrink: 0; }
 
@@ -157,7 +160,7 @@ audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 99
 .blk .ph { background: #fff !important; box-shadow: 0 0 10px rgba(255,255,255,.7) !important; }
 
 /* stats readout (built by studio.js from upstream's timing line): two compact lines */
-.sa3-stats { background: rgba(13,13,18,0.7); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 9px 12px; }
+.sa3-stats { background: rgba(13,13,18,0.9); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 9px 12px; }
 .sa3-stats .p { display: block; font-size: 13px; color: #e3e3ee; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa3-stats .neg { font-size: 12px; color: #8b8b9c; margin-top: 2px; }
 .sa3-stats .warn { font-size: 12px; color: #ffb35c; margin-top: 3px; }
@@ -227,12 +230,12 @@ audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 99
 #sa3-hist { max-height: none !important; overflow: visible !important; padding-right: 0 !important; margin-top: 6px !important; }
 /* each clip is its own card: prompt header on top (order:-1), then transport + labels, then spectrogram,
    with a clear gap between cards so a caption can't be misread as the next clip's header */
-:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk { display: flex !important; flex-direction: column; background: rgba(255,255,255,0.025) !important;
+:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk { display: flex !important; flex-direction: column; background: rgba(23,23,29,0.9) !important;   /* solid stand-in for the old 2.5% white over a blurred backdrop */
   border: 1px solid rgba(255,255,255,0.07) !important; border-radius: 12px !important; padding: 8px 10px 10px !important;
   transition: background .12s, border-color .12s; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk + .blk { margin-top: 12px !important; }
-:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:hover { background: rgba(255,255,255,0.04) !important; border-color: rgba(255,255,255,0.13) !important; }
-:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:has(.sa3-mini.on) { border-color: rgba(155,140,255,0.5) !important; background: rgba(155,140,255,0.06) !important; }
+:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:hover { background: rgba(26,26,33,0.9) !important; border-color: rgba(255,255,255,0.13) !important; }
+:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:has(.sa3-mini.on) { border-color: rgba(155,140,255,0.5) !important; background: rgba(25,24,37,0.9) !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .sa3-hrow { flex-direction: column !important; align-items: stretch !important; gap: 5px !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .sa3-hrow > div { flex: none !important; width: 100%; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .sa3-native { display: none !important; }
@@ -344,7 +347,7 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
 /* settings hover card (studio.js showSettings): rest 0.5 s on a clip's "settings" button */
 #sa3-setcard { position: fixed; z-index: 300; width: 340px; max-width: calc(100vw - 16px); padding: 12px 14px 10px; border-radius: 14px;
   background: rgba(19,19,26,0.97); border: 1px solid rgba(155,140,255,0.32); box-shadow: 0 16px 40px rgba(0,0,0,0.55);
-  backdrop-filter: blur(14px); pointer-events: none; opacity: 0; transform: translateY(-3px); transition: opacity .14s, transform .14s; }
+  pointer-events: none; opacity: 0; transform: translateY(-3px); transition: opacity .14s, transform .14s; }
 #sa3-setcard.on { opacity: 1; transform: none; }
 #sa3-setcard .pr { font-size: 12.5px; line-height: 1.4; color: #e9e9f1; padding-bottom: 9px; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.07);
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
@@ -431,7 +434,7 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
 .sa3-fnote { margin-left: 8px; color: #9b8cff; cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; }
 .sa3-fnote:hover { color: #fff; }
 #sa3-lib .empty, #sa3-lib .more { color: #5f5f70; font-size: 13px; text-align: center; padding: 40px 0 10px; }
-#sa3-libbtn { width: auto !important; min-width: 0 !important; flex: none; }
+#sa3-libbtn, #sa3-qbtn { width: auto !important; min-width: 0 !important; flex: none; }   /* beat gradio's .row > * min-width (it stretched Queue) */
 /* slider header: label + number box on one line even in the 40 % column */
 .gradio-container .head { flex-wrap: nowrap !important; gap: 6px !important; align-items: center !important; }
 .gradio-container .head > label { min-width: 0; }
@@ -557,3 +560,65 @@ body.sa3-resizing, body.sa3-resizing * { cursor: col-resize !important; user-sel
 #sa3-focusbtn:hover { color: #fff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.14); }
 #sa3-focusbtn.on { color: #c4bbff; border-color: rgba(155,140,255,0.4); }
 #sa3-focusbtn.on .fill { opacity: 0; }
+
+/* ── Queue: top-right button + small modal (studio.js renderQueue, renderq.py) ─── */
+#sa3-qbtn { flex: none; display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 12px 0 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.035);
+  color: #8b8b9c; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+#sa3-qbtn svg { width: 14px; height: 14px; }
+#sa3-qbtn.live { color: #c9c9d6; }
+#sa3-qbtn:hover, #sa3-qbtn.on { color: #fff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.14); }
+#sa3-qbtn b { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: linear-gradient(135deg, #9b8cff, #ff6fb5);
+  color: #0b0b10; font: 700 10px/16px "JetBrains Mono", monospace; text-align: center; }
+
+#sa3-queue { position: fixed; inset: 0; z-index: 200; background: rgba(5,5,9,0.35); backdrop-filter: blur(3px);
+  opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+#sa3-queue.open { opacity: 1; pointer-events: auto; }
+#sa3-queue .pane { position: absolute; top: 58px; right: 22px; width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 80px);
+  display: flex; flex-direction: column; border-radius: 16px; overflow: hidden;
+  background: rgba(14,14,20,0.95); border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,0.8), 0 0 0 1px rgba(155,140,255,0.06);
+  transform-origin: top right; transform: translateY(-8px) scale(0.97); transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+#sa3-queue.open .pane { transform: none; }
+#sa3-queue header { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+#sa3-queue h3 { margin: 0; font-size: 15px; font-weight: 700; color: #f4f4fa; letter-spacing: -0.01em; }
+#sa3-queue .cnt { font: 500 11.5px "JetBrains Mono", monospace; color: #7d7d8e; }
+#sa3-queue .sp { flex: 1; }
+#sa3-queue .clr { background: transparent; border: 1px dashed rgba(255,255,255,0.14); color: #8b8b9c; border-radius: 8px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+#sa3-queue .clr:hover:not(:disabled) { color: #ff8a9a; border-color: rgba(255,90,110,0.5); }
+#sa3-queue .clr:disabled { opacity: .35; cursor: default; }
+#sa3-queue .x { width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: #8b8b9c; font-size: 20px; line-height: 1; cursor: pointer; }
+#sa3-queue .x:hover { background: rgba(255,255,255,0.07); color: #fff; }
+#sa3-queue .list { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+#sa3-queue .empty { padding: 26px 10px; text-align: center; color: #6f6f80; font-size: 12.5px; line-height: 1.6; }
+#sa3-queue .qj { position: relative; display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); transition: opacity .15s, border-color .12s; }
+#sa3-queue .qj:not(.run) { cursor: grab; }
+#sa3-queue .qj:hover { border-color: rgba(255,255,255,0.13); }
+#sa3-queue .qj.run { background: rgba(155,140,255,0.07); border-color: rgba(155,140,255,0.35); }
+#sa3-queue .qj.drag, #sa3-queue .qj.gone { opacity: .35; }
+#sa3-queue .qj.above::before, #sa3-queue .qj.below::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, #9b8cff, #ff6fb5); }
+#sa3-queue .qj.above::before { top: -5px; } #sa3-queue .qj.below::after { bottom: -5px; }
+#sa3-queue .hd { display: flex; align-items: center; gap: 6px; font: 600 11px "JetBrains Mono", monospace; color: #6f6f80; }
+#sa3-queue .grip { color: #4f4f60; letter-spacing: -2px; }
+#sa3-queue .now { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: #c4bbff; animation: sa3-qpulse 1.6s ease-in-out infinite; }
+@keyframes sa3-qpulse { 50% { opacity: .45; } }
+#sa3-queue .bd { min-width: 0; }
+#sa3-queue .pr { color: #e3e3ee; font-size: 12.5px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#sa3-queue .pr i { color: #6f6f80; }
+#sa3-queue .ch { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+#sa3-queue .ch span { padding: 1px 7px; border-radius: 99px; font: 500 10.5px "JetBrains Mono", monospace; color: #9b9bab;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sa3-queue .ch .lo { color: #ffb3dc; border-color: rgba(255,111,181,0.25); }
+#sa3-queue .ch .au { color: #8fe3d8; border-color: rgba(79,209,197,0.25); }
+#sa3-queue .ch .ng { color: #c9a0a8; }
+#sa3-queue .ac { display: flex; align-items: center; gap: 3px; }
+#sa3-queue .ac button { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; border: 0;
+  background: transparent; color: #7d7d8e; font-size: 9px; cursor: pointer; }
+#sa3-queue .ac button svg { width: 14px; height: 14px; }
+#sa3-queue .ac button:hover:not(:disabled) { background: rgba(255,255,255,0.07); color: #fff; }
+#sa3-queue .ac button:disabled { opacity: .25; cursor: default; }
+#sa3-queue .ac .del:hover { color: #ff8a9a !important; background: rgba(255,90,110,0.12) !important; }
+#sa3-queue .ac .skip { width: auto; padding: 0 10px; font-size: 11.5px; font-weight: 600; color: #ff8a9a; border: 1px solid rgba(255,90,110,0.35); }
+#sa3-queue .ac .skip:hover:not(:disabled) { background: rgba(255,90,110,0.14) !important; color: #ffb0bb !important; }

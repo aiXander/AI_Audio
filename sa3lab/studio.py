@@ -25,6 +25,10 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - defaults Duration to 120 s (the blind-bench winner, see main()),
 - adds a Stop button (shown only while a render runs) that interrupts the
   MLX job between sampler steps (see the "stop" block below),
+- queues every Generate click as its own job; the Queue button (top right,
+  studio.js mountQueue) opens a modal listing the running + waiting jobs with
+  a settings preview, to delete, drag-reorder or skip them (renderq.py edits
+  gradio's queue in place),
 - turns every render into a labelled dataset row (library.py): the sidecar gets
   a "gen" block with everything needed to regenerate it and a "label" block
   (0-10 score + free-text tags) that the per-clip label strip saves instantly,
@@ -46,6 +50,14 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
   From/To step window (the sampler steps the adapter is applied on) as
   read-only readouts, an "N active" badge on the accordion header; the pick
   dropdown lists every .safetensors under stable-audio-3/loras/ (_lora_library),
+- adds the Promptless panel under the prompt (anarchy_ui.py: an `anarchy: …` prompt is a
+  sampled conditioning spec, rendered through the normal Generate path),
+- makes seeds length-stable (noise.py: every noise draw is cropped from one fixed
+  4608-frame canvas, so a seed keeps its opening when Length changes),
+- adds an Extend button to every clip (extend.py/.js: restore the clip's settings with
+  Length + N s and the clip as inpaint reference, then Generate),
+- makes the output folder switchable (outdir.py: a folder chip by the Library button picks
+  the folder the history + Library show and new renders go to; queued jobs keep theirs),
 - injects a dark theme, CSS, fonts and a small JS layer at `launch()`
   (gradio 6 takes theme/css/js/head there), and forces localhost-only,
   no share link.
@@ -62,6 +74,7 @@ import json
 import os
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -78,6 +91,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import hispec  # noqa: E402  (full-HD dadaspec)
 import library  # noqa: E402  (dataset sidecars, label routes, progress)
 import persist  # noqa: E402  (history across reloads)
+import renderq  # noqa: E402  (the render queue modal's routes)
+import anarchy_ui  # noqa: E402  (the Promptless panel: anarchy_ui.js/.css + spec prompts)
+import addons  # noqa: E402  (add-on browser assets merged into CSS/JS)
+import outdir  # noqa: E402  (switchable output folder: view + render destination)
+import noise  # noqa: E402  (length-stable seeds: noise cropped from one fixed canvas)
+import extend  # noqa: E402  (Extend button: re-render a clip longer, the clip kept as inpaint context)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
 
@@ -180,9 +199,15 @@ LORA_LIB = Path(__file__).resolve().parent.parent / "stable-audio-3" / "loras"
 def _lora_library(dit_name: str) -> list:
     """Replaces upstream's _lora_dd_choices: every .safetensors under
     stable-audio-3/loras/ (subfolders included, same list for every model), shown
-    as its path relative to that folder without the extension."""
-    hits = sorted(p for p in LORA_LIB.rglob("*.safetensors")
-                  if not any(part.startswith(".") for part in p.relative_to(LORA_LIB).parts))
+    as its path relative to that folder without the extension. Natural sort:
+    digit runs compare as numbers, so `step=2000` lands before `step=14000`
+    (checkpoint names carry no leading zeros)."""
+    def natural(p):
+        return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower())
+                for t in re.split(r"(\d+)", str(p.relative_to(LORA_LIB))) if t]
+    hits = sorted((p for p in LORA_LIB.rglob("*.safetensors")
+                   if not any(part.startswith(".") for part in p.relative_to(LORA_LIB).parts)),
+                  key=natural)
     return [("from loras/ folder…", up._DD_NONE)] + [
         (str(p.relative_to(LORA_LIB).with_suffix("")), str(p)) for p in hits]
 
@@ -332,15 +357,19 @@ def _wire_handlers(demo):
             bf.trigger_mode = "multiple"
 
         def wrapped(*a, _orig=orig, _new=bf.name != "pregen", _gen=bf.name == "generate"):
-            if _gen:
-                library.job_started()
             if _new:
                 _stop["epoch"] += 1
             _tl.epoch = _stop["epoch"]
             _tl.gen = None
+            if _gen:                # the Queue modal's "now rendering" row (renderq.py)
+                renderq.running = {"id": _tl.epoch, "t": time.time(), "preview": renderq.preview(list(a[:-1]))}
             slot = "current" if _new else "queued"
             before = (a[-1].get(slot) or {}).get("key") if isinstance(a[-1], dict) else None
-            out = _orig(*a)
+            try:
+                out = _orig(*a)
+            finally:
+                if _gen and renderq.running and renderq.running["id"] == _tl.epoch:
+                    renderq.running = None
             state = out[-1] if isinstance(out, tuple) else None
             entry = state.get(slot) if isinstance(state, dict) else None
             if entry and entry.get("key") != before:
@@ -355,18 +384,16 @@ def _wire_handlers(demo):
     stop_btn = next(b for b in demo.blocks.values()
                     if isinstance(b, gr.Button) and b.elem_id == "sa3-stop")
 
-    gen_btn = next(b for b in demo.blocks.values()
-                   if isinstance(b, gr.Button) and b.elem_id == "sa3-generate")
-
     def stop():
         _stop["stopped_upto"] = _stop["epoch"]
-        library.jobs_cleared()
+
+    def skip(epoch):                # Queue modal: stop only the running job, later ones still run
+        _stop["stopped_upto"] = max(_stop["stopped_upto"], epoch)
+    renderq.skip_hook = skip
+    library.waiting_fn = lambda: renderq.n_waiting(demo)   # "+N queued" counts gradio's real queue
     with demo:   # cancels also drops renders still waiting in gradio's queue (the whole batch)
         stop_btn.click(stop, queue=False, show_progress="hidden",
                        cancels=[bf.get_config() for bf in gen_fns])
-        # counts clicks instantly (not queued) so the UI can show "+N queued"
-        gen_btn.click(library.job_submitted, queue=False, show_progress="hidden",
-                      trigger_mode="multiple")
 
 
 HEADER = """
@@ -500,6 +527,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -572,11 +600,19 @@ def _add_restore_settings(demo):
 
     def restore(name, cur_dit, cur_sec, cur_steps, prev, mem, vis, *slots):
         sess = name == SESSION
-        r = _prefs().get("session") if sess else library.restore_settings(name)
+        ext = None if sess else extend.parse(name)     # "Extend" on a clip (extend.py / extend.js)
+        r = _prefs().get("session") if sess else library.restore_settings(ext[0] if ext else name)
         if r is None:
             if sess:                # nothing saved yet: leave the defaults
                 return tuple(gr.update() for _ in range(n_out))
-            raise gr.Error(f"No render named {name!r}")
+            raise gr.Error(f"No render named {(ext[0] if ext else name)!r}")
+        note = None
+        if ext:
+            try:
+                r, note = extend.apply(r, *ext, library, up.MAX_SECONDS.get(
+                    r["dit"] if r.get("dit") in up.DIT_CHOICES else cur_dit, 120))
+            except ValueError as e:
+                raise gr.Error(f"Can't extend: {e}")
         keep = gr.update()
         tgt = r["dit"] if r.get("dit") in up.DIT_CHOICES else cur_dit
         n_steps = int(r.get("steps", cur_steps))
@@ -622,12 +658,17 @@ def _add_restore_settings(demo):
                float(r["sigma_max"]) if a2a_on and "sigma_max" in r else keep)),
             r.get("a2a_audio") if full else keep,
             r.get("inpaint_audio") if full else keep,
-            float(rng[0]) if rng else (0 if full else keep),
-            float(rng[1]) if rng else (0 if full else keep),
+            *((gr.update(value=float(rng[0]), maximum=float(r["seconds"])),     # the sliders' max follows
+               gr.update(value=float(rng[1]), maximum=float(r["seconds"])))    # Length only after this update
+              if ext else
+              (float(rng[0]) if rng else (0 if full else keep),
+               float(rng[1]) if rng else (0 if full else keep))),
         ]
         missing = [k for k, on in (("guide audio", a2a_on and full and not r.get("a2a_audio")),
                                    ("inpaint audio", bool(rng) and not r.get("inpaint_audio"))) if on]
-        if not sess:
+        if note:
+            gr.Info(note)
+        elif not sess:
             gr.Info("Settings restored" + ("" if full else " (old render: model, prompt, seed, CFG, length only)")
                     + (f" · missing {', '.join(missing)}" if missing else ""))
         return tuple(out + extra)
@@ -640,6 +681,8 @@ def _add_restore_settings(demo):
                               outputs=list(dit_bf.outputs) + [dit_dd, prompt, neg, steps, seed, cfg, apg,
                                                               sigma_g, init_noise, a2a, inpaint, inp_s, inp_e],
                               queue=False, show_progress="hidden")
+        # extend.js: an Extend click renders once restored (.success: never after a failed restore)
+        ev.success(None, js="() => { if (window.sa3AfterRestore) window.sa3AfterRestore(); }")
         if vis_bf is not None:
             ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
         ev.then(None, js=up._JS_FIX_SLIDERS)
@@ -743,7 +786,7 @@ def _layout(demo):
         with gr.Row(elem_id="sa3-actions") as bar:
             pass
         with gr.Row(elem_id="sa3-right") as right:   # auto-play + (studio.js) the Library button
-            autoplay = gr.Checkbox(label="Auto-play when ready", value=True,
+            autoplay = gr.Checkbox(label="Autoplay", value=True,
                                    elem_id="sa3-autoplay", container=False, scale=0)
 
         # the toggle mirrors "Auto-play" in Playback & files (both ways, user edits only)
@@ -819,7 +862,14 @@ def main():
 
     up.render_spectrogram_png = hispec.render_spectrogram_png  # sa3_gradio imported it by name
     library.init(up)
+    noise.install(library)
+    extend.install(library)
+    outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
+    renderq.install_routes()
+    anarchy_ui.install(up, persist)
+    anarchy_ui.install_routes()
+    outdir.install_routes()
     _install_stop_hooks()
     up.render_player = _row_player(up.render_player)   # newest clip = first list row
     orig_render_player = up.render_player   # new entries are persisted in _wire_handlers
@@ -832,8 +882,10 @@ def main():
         _wire_handlers(self)
         _add_restore_settings(self)
         _layout(self)
+        outdir.install(self, persist, hispec.render_spectrogram_png, orig_render_player,
+                       HISTORY_ON_LOAD)          # after _wire_handlers: wraps outside it
         kw.update(share=False, server_name="127.0.0.1", theme=theme, css=CSS, js=JS)
-        kw["allowed_paths"] = list(kw.get("allowed_paths") or []) + [out_real]
+        kw["allowed_paths"] = list(kw.get("allowed_paths") or []) + [out_real, str(outdir.ROOT)]
         print("SA3 Studio → http://127.0.0.1:%s" % (kw.get("server_port") or 7860), flush=True)
         return orig_launch(self, *a, **kw)
     gr.Blocks.launch = launch

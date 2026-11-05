@@ -32,7 +32,8 @@ FastAPI app (so a score click never waits behind a running render in the queue):
     POST /sa3/delete?name=<file>    trash a render: label score 0 + "deleted", then audio +
                                     sidecar move to OUT_DIR/deleted/ (out of the UI and the
                                     Library, kept on disk as a negative training example)
-    GET  /sa3/progress              → live progress of the running render
+    GET  /sa3/progress              → live progress of the running render (+ jobs waiting)
+    GET|POST /sa3/queue             → the render queue: list / delete / reorder / skip (renderq.py)
     GET  /sa3/boot                  → server boot id (the page reloads when it changes)
     GET  /sa3/library               → every render as a filterable row (Library modal)
     GET  /sa3/spec?name=  /sa3/audio?name=   its spectrogram jpeg / audio file
@@ -124,6 +125,7 @@ def restore_settings(name: str) -> dict | None:
     except Exception:
         d = {}
     g = d.get("gen")
+    an = {"anarchy": d["anarchy"]} if d.get("anarchy") else {}   # latent renders (anarchy_ui.py)
     if g:
         def inp(x):
             rel = (x or {}).get("archived")
@@ -131,8 +133,8 @@ def restore_settings(name: str) -> dict | None:
         return {k: g[k] for k in ("dit", "decoder", "prompt", "negative_prompt", "seed", "seconds",
                                   "steps", "cfg", "apg", "sigma_max", "mode", "inpaint_range_sec")
                 if k in g} | {"negative_prompt": g.get("negative_prompt", ""), "loras": g.get("loras") or [], "a2a_audio": inp(g.get("a2a_audio")),
-                             "inpaint_audio": inp(g.get("inpaint_audio")), "full": True}
-    out = {"full": False}
+                             "inpaint_audio": inp(g.get("inpaint_audio")), "full": True} | an
+    out = {"full": False, **an}
     for src, dst in (("dit", "dit"), ("prompt", "prompt"), ("neg", "negative_prompt"), ("seed", "seed"),
                      ("cfg", "cfg"), ("smx", "sigma_max"), ("mode", "mode")):
         if d.get(src) is not None:
@@ -243,6 +245,9 @@ def delete_render(name: str) -> bool:
             stem = f"{p.stem}.{i}{p.suffix}"
             i += 1
         shutil.move(str(sc), str(dst / (stem + ".json")))
+        latent = p.with_name(p.name + ".cond.npz")         # anarchy_ui.py: a latent render's conditioning
+        if latent.exists():
+            shutil.move(str(latent), str(dst / (stem + ".cond.npz")))
         shutil.move(str(p), str(dst / stem))
     _rows.pop(p.name, None)
     return True
@@ -474,35 +479,18 @@ def progress_phase(phase: str) -> None:
 
 def progress_end() -> None:
     _prog["active"] = False
-    _jobs["t_end"] = time.time()
 
 
 # batch queue: every Generate click is a job in gradio's queue (trigger_mode="multiple",
-# studio.py). We count clicks (a non-queued listener) and starts to show "+N queued".
-_jobs = {"submitted": 0, "started": 0, "t_submit": 0.0, "t_end": 0.0}
-
-
-def job_submitted() -> None:
-    _jobs["submitted"] += 1
-    _jobs["t_submit"] = time.time()
-
-
-def job_started() -> None:
-    _jobs["started"] += 1
-    _jobs["submitted"] = max(_jobs["submitted"], _jobs["started"])
-
-
-def jobs_cleared() -> None:
-    """Stop cancels everything still waiting in gradio's queue."""
-    _jobs["submitted"] = _jobs["started"]
+# studio.py); renderq.py reads that queue directly. studio.py points this at it.
+waiting_fn = lambda: 0   # noqa: E731  (jobs still waiting behind the running one)
 
 
 def jobs_waiting() -> int:
-    # self-heal drift (a tab closed with jobs pending drops them from gradio's queue):
-    # nothing running and nothing submitted or finished for a while means no queue
-    if not _prog.get("active") and time.time() - max(_jobs["t_end"], _jobs["t_submit"]) > 5:
-        _jobs["submitted"] = _jobs["started"]
-    return max(0, _jobs["submitted"] - _jobs["started"])      # `started` already counts the running job
+    try:
+        return int(waiting_fn())
+    except Exception:
+        return 0
 
 
 def progress() -> dict:

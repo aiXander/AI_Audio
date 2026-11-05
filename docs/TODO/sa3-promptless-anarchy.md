@@ -1,6 +1,6 @@
 # SA3 promptless anarchy: sampling T5Gemma conditioning instead of writing prompts
 
-**Status: Stage 1 started — `grammar-music-100` exists (below); nothing mined or rendered.**
+**Status: Stages 1–2 done for `grammar-music-100` (corpus, 100 reference renders, first fit); studio Promptless panel + switchable output folder built; no latent clip listened to yet; Stage 2's three numeric sanity renders not done.**
 The base corpus is synthetic, so nothing waits on the studio's labeled dataset. Order: Stages 1–2 need no listening;
 Stage 3 (`E00-edge`) is the first experiment; Stage 4's lanes are picked by E00's result.
 
@@ -139,7 +139,38 @@ Not committed (open question 3 below).
 The vocab lists and generator are code-like text and could be committed, but they encode
 Xander's taste: ask first. The `captions` download is small but still a download: ask.
 
+**Built: reference renders of the corpus.** `sa3lab/anarchy/render_corpus.py` renders
+every prompt of a corpus with the studio's *default* controls into a separate folder
+(`outputs/sa3-corpus-grammar-music-100/` for this corpus, `render.log` beside it), in
+exactly the studio's format: it runs `studio.main()` headlessly with `gr.Blocks.launch`
+swapped for the batch loop and `sa3_gradio.OUTPUT_DIR` retargeted before `studio` is
+imported, so the files, the `gen` block, the uid naming and the tempo `analysis` come from
+the studio's own code, never a copy. It adds one extra sidecar block, `corpus` (file,
+line, world, family, style). Resumable (skips prompts already in the folder). Trap: if
+the studio's handler wiring changes (`studio._wire_handlers`, upstream's `generate`
+inputs), re-run it with `--dry-run` and check the printed control values.
+
 ## Stage 2 — mine, fit, autopsy (no listening)
+
+**Built (first fit, `grammar-music-100`, Medium):** `sa3lab/anarchy/fit.py` does mine + fit +
+concept vocabulary + a correlation autopsy in one command (seconds; the encode is cached), into
+`models/derived/anarchy/<corpus>/` (`mine.npz`, `medium__tensor`, `medium__token`,
+`medium__concepts.npz`, `medium__report.json`; 44 MB). `fit.expand()` turns a cropped sample back
+into `(256, 768)`. It encodes one prompt per call (not batched), the way the studio does. Findings:
+- **The learned padding vector is ~zero** (norm 0.5 vs content tokens 122 ± 16). Padding
+  positions add attention keys (qk-norm rescales even a tiny vector to unit size) but ~zero
+  values, so the pad count dilutes the content: evidence for the strength/emphasis lane (4A).
+- **PC1 and PC2 are wording axes, not music**: PC1 (7.5% var) has r = +0.84 with prompt length
+  and +0.72 with the `TrackType` prefix; PC2 has −0.59 with the prefix and −0.53 with tags style.
+  Surface style and lowercase load PC3–PC5. Only 31 of the 99 axes clear the noise floor.
+  Before E00: decide whether to normalize the wording (fixed prefix policy, fixed case) in v2,
+  or sample with `comp_lo` past the wording axes.
+- k-means clusters split cleanly into template/punctuation clusters (`type, genre, moods`,
+  `:`, `,`), instruments, genres, timbre words (`drone, granular, tape, glitch`), motion words
+  (`fast, interlocking, rolling`), places and sub-word fragments: the vocabulary for
+  concept cocktails, once the template clusters are excluded.
+- Sampling sanity: pca draws at T 1 land at `distance()` ≈ 1, T 2 at ≈ 2; corpus prompts sit at
+  0.55–0.94.
 
 - **`mine`**: encode each corpus batched; cache **raw** embeddings + masks + token ids (so
   every vector can be traced back to the word it came from), fp16. **Crop** to
@@ -174,6 +205,39 @@ Xander's taste: ask first. The `captions` download is small but still a download
   don't pull its torch-tier modules, don't vendor a copy (that forks the math).
 
 ## Stage 3 — `E00-edge`, the first listening experiment
+
+**Built: the render tooling (all listening data so far was discarded; start fresh).**
+- `sa3lab/anarchy/sampler.py`: an anarchy sample is a prompt string,
+  `anarchy: <fit> <sampler> T<temp> d<dir> [L<prompt tokens>] [c<skip PCs>]` or
+  `anarchy: @<saved .cond.npz>`. Deterministic: the string reproduces the conditioning.
+- Studio Promptless panel (`sa3lab/anarchy_ui.py/.js/.css`): an Active switch; while on, the
+  Prompt box mirrors the spec (read-only; the text prompt is stashed and restored on switch-off)
+  and the studio's own Generate renders the chosen mode (one draw / N random directions /
+  N-step temperature ladder with one pinned noise seed). Temperature is a range (two-thumb
+  slider) drawn per render, uniform or Gaussian (σ = range/4); the box shows it as
+  `T0.5–2(uniform)`, which anarchy_ui.py also resolves server-side (Infinite Radio's pregen
+  re-reads the box) and the sidecar records the concrete T drawn. A blank Direction box
+  = a new random direction per render (`d?` in the box, resolved the same way). So the queue, Stop, history and labels are
+  unchanged. Restoring a LATENT clip's settings loads its spec into the panel and switches it
+  on; restoring a TEXT clip switches it off. Every latent render saves
+  `<audio>.cond.npz` (fp16 = exactly what the DiT consumed) + an `anarchy` sidecar block;
+  clip cards carry TEXT / LATENT badges, a colour-coded `distance()` pill on the spectrogram
+  (green at 1, blue tamer, red at 3), and the settings card shows the latent block.
+- Two 4A bag operators are panel samplers (built 2026-11-05, nothing heard yet): `cocktail`
+  (`k<n>`) and `mutate` (`m<pct> | <anchor text>`, the panel's Anchor box). Semantics and
+  the concept-cluster filter in the `anarchy/sampler.py` docstring; numbers in 4A below.
+- Switchable output folder (`sa3lab/outdir.py/.js`): a folder chip by the Library button picks
+  the folder the history + Library show; each Generate binds its destination at click time,
+  so queued jobs keep their folder, and a clip finishing in a folder that's not on screen does
+  not enter the current view. Latent sessions go in `outputs/anarchy/<session>/`.
+- Batch scripts on the studio-headless harness `sa3lab/anarchy/headless.py`:
+  `edge_map.py` (the CRN ladder design below, 10 s) and `random_batch.py` (every number drawn
+  from a distribution). They pre-date the `.cond.npz`-beside-audio convention and save
+  conditioning in `cond/` instead. Injection verified exact (prompt vs its own injected
+  encoding: bit-identical audio).
+- Xander's call: the first E00 (48 clips) and random batch 2 (6 clips) were moved to the
+  macOS Trash (`~/.Trash/sa3-latent-samples-2026-11-05/`), so no clip has been listened to
+  or labeled yet.
 
 **Question:** per sampler family, at what reach does music turn to mush, and what lives
 just before the edge?
@@ -230,10 +294,16 @@ Lanes 4D (time) and 4F (taste loop) are worth running whatever E00 says.
 - *Emphasis*: duplicate chosen tokens ×{1, 2, 4, 8} = prompt weighting on the distilled
   model; and a padding-count sweep (fewer/more pads) as a conditioning-strength dial. Gated
   on sanity render 3.
-- *Replace-m*: a real prompt's bag with m of its L vectors resampled. A reach knob anchored
-  on a known prompt, in units anyone can read ("40% resampled").
-- *Concept cocktails*: k ∈ {2…6} concept-vocabulary centroids + padding: few strong
-  concepts instead of diffuse soup (semantic-anarchy's E10 "sparse axis cocktails").
+- *Replace-m* — **built as the `mutate` sampler**: a real prompt's bag with m% of its L
+  vectors resampled from the token fit at T. A reach knob anchored on a known prompt, in
+  units anyone can read ("40% resampled"). Verified: m0 is bit-identical to the prompt's own
+  encoding. Experiment: one prompt, m ∈ {0, 20, 40, 70, 100} at T 1, fixed noise seed.
+- *Concept cocktails* — **built as the `cocktail` sampler**: k concept clusters share the L
+  content slots (each repeated ≈ L/k times); slot = cluster mean + T·(real member token −
+  mean), norm-matched to that token (a raw cluster mean is ~25% shorter: 90 vs 122). Only
+  16 of `grammar-music-100`'s 48 clusters survive the template/punctuation filter, and a few
+  of those are sub-word fragments; a bigger corpus or a higher `--k` gives a richer
+  vocabulary (semantic-anarchy's E10 "sparse axis cocktails").
 
 **4B · Reach corrections**: per-token norm matching (the SA3-specific one, above); radius
 band; length mode corpus vs fixed vs off; `split` four corners (temp-on/off ∈ {0.5, 2}²):
@@ -290,9 +360,13 @@ lexicon in the research doc, semantic-anarchy-ledger style.
 
 - **The padding vector is per DiT.** A fit on padded embeddings belongs to one DiT; the
   cache stores raw embeddings for that reason. Mixing gives no error, just wrong conditioning.
-- **Noise only matches at equal `seconds`** (init noise is `(1, 256, T_lat)`, T_lat from
-  seconds). Never vary seconds inside a ladder; a keeper re-rendered at 120 s is a cousin,
-  not the same clip (new noise shape and duration token).
+- **Length still changes the clip, less than before.** Since 2026-11-05 the studio crops all
+  noise from one fixed 4608-frame canvas (`sa3lab/noise.py`; sidecar `gen.noise:
+  "crop4608"`), so a seed shares its noise across lengths. Before that, noise was drawn at
+  `(1, 256, T_lat)`, so another length meant different noise (r ≈ 0.001). Even with shared
+  noise, the duration token and full-sequence attention change the piece: never vary
+  seconds inside a ladder; a keeper re-rendered at 120 s is a cousin. Batch scripts that
+  bypass the studio (`sa3lab/bench/quality_bench.py`) still draw per-length noise.
 - **Past-prompt positions are a two-population mixture** (content vs the constant pad), and
   the pad side has zero variance. A pooled Gaussian peaks in the gap: fit and sample with
   `lengths=`. Its `MIN_LENGTH_GROUP` is 20: positions with fewer prompts on one side

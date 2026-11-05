@@ -221,6 +221,7 @@
     enhanceHistory();
     makeDraggable();
     enhanceLabels();
+    mountQueue();
     mountLibrary();
     applyMainFilter();
     mountMore();
@@ -229,6 +230,58 @@
     loraSync();
     mountSplit();
     mountFocus();
+    keepPlaying();
+  }
+
+  // ── a finished render never interrupts what you're listening to ──
+  // gradio re-renders the player + history HTML on every finished render, so the <audio>
+  // you were playing is replaced by a fresh copy, and with Autoplay on the new clip starts
+  // and upstream's onplay pauses everything else. So: remember the clip you're listening to;
+  // when its element is swapped out, resume the new copy (same src) at the same position;
+  // and while it plays, cancel any play that isn't yours (no click/key in the last 1.5 s).
+  // Hotswap players (data-hs) are left alone: swapping mid-play is their job.
+  let listen = null;                                   // { el, src, t, ts, on }
+  let gestureAt = 0;
+  addEventListener("pointerdown", () => { gestureAt = Date.now(); }, true);
+  addEventListener("keydown", (e) => { if (!/INPUT|TEXTAREA|SELECT/.test(e.target.tagName || "")) gestureAt = Date.now(); }, true);
+  const srcOf = (a) => a.getAttribute("src") || "";
+  const isMedia = (x) => x instanceof HTMLMediaElement;
+  // media events don't bubble: capture phase on document sees every connected <audio>
+  // (a detached element's events never reach document, so a swap's teardown pause is invisible)
+  document.addEventListener("play", (e) => {
+    const a = e.target;
+    if (!isMedia(a)) return;
+    if (listen && listen.on && a !== listen.el && srcOf(a) !== listen.src && !a.dataset.hs
+        && Date.now() - gestureAt > 1500) {
+      e.stopImmediatePropagation();                    // upstream's onplay would pause your clip
+      a.removeAttribute("autoplay");
+      a.pause();
+      return;
+    }
+    listen = { el: a, src: srcOf(a), t: a.currentTime, ts: Date.now(), on: true };
+  }, true);
+  document.addEventListener("pause", (e) => { if (listen && e.target === listen.el) listen.on = false; }, true);
+  document.addEventListener("ended", (e) => { if (listen && e.target === listen.el) listen.on = false; }, true);
+  document.addEventListener("timeupdate", (e) => {
+    if (listen && e.target === listen.el && !e.target.paused) { listen.t = e.target.currentTime; listen.ts = Date.now(); }
+  }, true);
+  function keepPlaying() {
+    if (!listen || !listen.on || listen.el.isConnected) return;
+    const ghost = listen.el;                           // swapped out; Chrome may keep it playing detached
+    const next = [...document.querySelectorAll("audio")].find((x) => x !== ghost && srcOf(x) === listen.src);
+    if (!next) return;                                 // not back in the DOM (yet): retried on the next mutation
+    listen.el = next;
+    const go = () => {
+      const t = ghost.paused ? listen.t + (Date.now() - listen.ts) / 1000 : ghost.currentTime;
+      try { next.currentTime = isFinite(next.duration) ? Math.min(t, next.duration - 0.05) : t; } catch (e) { /* not seekable yet */ }
+      next.addEventListener("playing", () => ghost.pause(), { once: true });
+      next.play().catch(() => { ghost.pause(); });
+    };
+    if (next.readyState >= 1) go();
+    else {
+      next.addEventListener("loadedmetadata", go, { once: true });
+      if (next.preload === "none") { next.preload = "metadata"; next.load(); }
+    }
   }
   // ── history rows: tiny transport bar above a full-width spectrogram ──
   const fmt = (t) => !isFinite(t) ? "0:00" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -555,6 +608,7 @@
     add("A→A input", d.a2a_audio ? esc(base(d.a2a_audio)) : null);
     add("Inpaint", d.inpaint_audio || d.inpaint_range_sec ? esc([base(d.inpaint_audio),
       d.inpaint_range_sec ? `${num(d.inpaint_range_sec[0])}–${num(d.inpaint_range_sec[1])} s` : ""].filter(Boolean).join(" · ")) : null);
+    if (window.sa3SettingsExtra) rows.push(...window.sa3SettingsExtra(d, esc, num));   // add-ons (anarchy_ui.js)
     return `<div class="pr">${esc(d.prompt || "(no prompt)")}</div><dl>${rows.join("")}</dl>
       <div class="ft">${d.full === false ? "older render: steps, APG and LoRAs weren't recorded · " : ""}click to restore all</div>`;
   }
@@ -687,7 +741,7 @@
     const btn = document.createElement("button");
     btn.id = "sa3-libbtn";
     btn.title = "Browse and filter every render (L)";
-    btn.innerHTML = `${ICON_FILTER}<span>Library</span><b></b>`;
+    btn.innerHTML = `${ICON_FILTER}<span>Filter</span><b></b>`;
     btn.addEventListener("click", () => toggleLibrary());
     top.appendChild(btn);
     paintLibBadge();
@@ -847,6 +901,9 @@
     clearTimeout(libTimer);                     // BPM still being measured: refresh shortly
     if (libEl && libEl.classList.contains("open") && libRows.some((x) => x.bpm && x.bpm.pending)) libTimer = setTimeout(loadLibrary, 2500);
   }
+  window.sa3ReloadLibrary = () => {           // outdir.js: the active output folder changed
+    libRows = []; libByName = new Map(); libLoaded = false; loadLibrary();
+  };
   function toggleLibrary(want) {
     if (!libEl) buildLibrary();
     const open = want === undefined ? !libEl.classList.contains("open") : want;
@@ -1001,6 +1058,175 @@
     $(".list").replaceChildren(...kids);        // re-inserted synchronously: a playing row keeps playing
   }
 
+  // ── Queue: top-right button → small modal listing the render jobs (GET/POST /sa3/queue) ──
+  // Every Generate click is a job in gradio's queue; renderq.py lists and edits it in place.
+  // The running job can be skipped (stops only it); waiting jobs can be deleted, moved
+  // with the arrows or dragged into a new order. Polls once a second while open.
+  const QMIME = "application/x-sa3-qjob";
+  let qEl = null, qTimer = null, qData = { running: null, waiting: [] }, qDrag = null, qSig = "";
+  function mountQueue() {
+    const top = document.getElementById("sa3-right") || document.getElementById("sa3-top");
+    if (!top || document.getElementById("sa3-qbtn")) return;
+    const btn = document.createElement("button");
+    btn.id = "sa3-qbtn";
+    btn.title = "Render queue: reorder, delete or skip jobs (Q)";
+    btn.innerHTML = `<svg viewBox="0 0 16 16"><path d="M2.5 4h8M2.5 8h8M2.5 12h5M12.5 10v4m-2-2h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Queue</span><b></b>`;
+    btn.addEventListener("click", () => toggleQueue());
+    const lib = document.getElementById("sa3-libstack") || document.getElementById("sa3-libbtn");   // stack: outdir.js
+    if (lib && lib.parentElement === top) top.insertBefore(btn, lib); else top.appendChild(btn);
+    paintQueueBadge();
+  }
+  function paintQueueBadge() {
+    const btn = document.getElementById("sa3-qbtn");
+    if (!btn) return;
+    const open = qEl && qEl.classList.contains("open");
+    const n = open ? (qData.running ? 1 : 0) + qData.waiting.length
+      : (document.body.classList.contains("sa3-busy") ? 1 : 0) + (prog.waiting || 0);
+    const b = btn.querySelector("b");
+    b.textContent = n || ""; b.style.display = n ? "" : "none";
+    btn.classList.toggle("live", n > 0);
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && qEl && qEl.classList.contains("open")) { toggleQueue(false); return; }
+    if (e.key === "q" && !e.metaKey && !e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) toggleQueue();
+  });
+  function qChips(p) {
+    const c = [];
+    const n = (v) => (v === null || v === undefined ? "?" : +(+v).toFixed(2));
+    if (p.dit) c.push(p.dit + (p.decoder ? ` · ${p.decoder}` : ""));
+    if (p.seconds) c.push(`${n(p.seconds)} s`);
+    if (p.steps) c.push(`${p.steps} steps`);
+    if (p.cfg !== null && p.cfg !== undefined) c.push(`cfg ${n(p.cfg)}` + (p.apg !== undefined && p.apg !== 1 ? ` · apg ${n(p.apg)}` : ""));
+    c.push(p.seed ? `seed ${p.seed}` : "random seed");
+    if (p.sigma !== undefined) c.push(`σ ${n(p.sigma)}`);
+    let h = c.map((t) => `<span>${esc(String(t))}</span>`).join("");
+    for (const l of p.loras || []) h += `<span class="lo" title="LoRA">${esc(l.name)} ×${n(l.strength)}</span>`;
+    if (p.a2a) h += `<span class="au" title="Audio → audio guide">a2a ${esc(p.a2a.audio)} @${n(p.a2a.noise)}</span>`;
+    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${n(p.inpaint.from)}–${n(p.inpaint.to)} s</span>`;
+    if (p.neg) h += `<span class="ng" title="Negative prompt">neg: ${esc(p.neg)}</span>`;
+    return h;
+  }
+  function qRow(job, i) {
+    const p = job.preview || {}, run = i < 0;
+    const d = document.createElement("div");
+    d.className = "qj" + (run ? " run" : "");
+    d.dataset.id = job.id;
+    const pr = p.prompt ? esc(p.prompt) : "<i>(no prompt)</i>";
+    const acts = run
+      ? `<button class="skip" title="Stop this render only; the next job starts right away">Skip</button>`
+      : `<button class="up" title="Move up"${i === 0 ? " disabled" : ""}>▲</button>
+         <button class="dn" title="Move down"${i === qData.waiting.length - 1 ? " disabled" : ""}>▼</button>
+         <button class="del" title="Remove from the queue">${ICON_TRASH}</button>`;
+    d.innerHTML = `
+      <div class="hd">${run ? '<span class="now">rendering</span>' : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
+      <div class="bd"><div class="pr" title="${esc(p.prompt || "")}">${pr}</div><div class="ch">${qChips(p)}</div></div>
+      <div class="ac">${acts}</div>`;
+    if (!run) d.draggable = true;
+    return d;
+  }
+  function renderQueue() {
+    if (!qEl) return;
+    const sig = JSON.stringify(qData);
+    if (sig === qSig || qDrag) return;             // unchanged, or mid-drag: keep the DOM
+    qSig = sig;
+    const list = qEl.querySelector(".list"), kids = [];
+    if (qData.running) kids.push(qRow(qData.running, -1));
+    qData.waiting.forEach((j, i) => kids.push(qRow(j, i)));
+    if (!kids.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.innerHTML = "Nothing queued.<br>Every Generate click (<kbd>⌘</kbd><kbd>↵</kbd>) adds a job here.";
+      kids.push(e);
+    }
+    list.replaceChildren(...kids);
+    const w = qData.waiting.length;
+    qEl.querySelector(".cnt").textContent = (qData.running ? "1 rendering" : "idle") + (w ? ` · ${w} waiting` : "");
+    qEl.querySelector(".clr").disabled = !w;
+    paintQueueBadge();
+  }
+  async function loadQueue() {
+    try { const r = await fetch("sa3/queue"); if (r.ok) { qData = await r.json(); renderQueue(); } }
+    catch (e) { /* server restarting */ }
+  }
+  async function qPost(body) {
+    try {
+      const r = await fetch("sa3/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.running !== undefined) { qData = { running: d.running, waiting: d.waiting }; qSig = ""; renderQueue(); }
+      if (!d.ok && d.error) console.warn("[sa3] queue:", d.error);
+    } catch (e) { console.warn("[sa3] queue op failed", e); }
+  }
+  function buildQueue() {
+    qEl = document.createElement("div");
+    qEl.id = "sa3-queue";
+    qEl.innerHTML = `
+      <div class="pane" role="dialog" aria-label="Render queue">
+        <header><h3>Queue</h3><span class="cnt"></span><span class="sp"></span>
+          <button class="clr" title="Remove every waiting job (the running one keeps going)">Clear waiting</button>
+          <button class="x" title="Close (Esc)">×</button></header>
+        <div class="list"></div>
+      </div>`;
+    document.body.appendChild(qEl);
+    qEl.addEventListener("mousedown", (e) => { if (e.target === qEl) toggleQueue(false); });
+    qEl.querySelector(".x").addEventListener("click", () => toggleQueue(false));
+    qEl.querySelector(".clr").addEventListener("click", () => qPost({ op: "clear" }));
+    const list = qEl.querySelector(".list");
+    list.addEventListener("click", (e) => {
+      const b = e.target.closest("button"), row = e.target.closest(".qj");
+      if (!b || !row || b.disabled) return;
+      const id = row.classList.contains("run") ? qData.running && qData.running.id : row.dataset.id;
+      const i = qData.waiting.findIndex((j) => j.id === row.dataset.id);
+      if (b.classList.contains("skip")) { b.disabled = true; qPost({ op: "skip", id }); }
+      else if (b.classList.contains("del")) { row.classList.add("gone"); qPost({ op: "delete", id }); }
+      else if (b.classList.contains("up")) qPost({ op: "move", id, to: i - 1 });
+      else if (b.classList.contains("dn")) qPost({ op: "move", id, to: i + 1 });
+    });
+    // drag to reorder: drop above/below the row under the cursor
+    const clearMarks = () => list.querySelectorAll(".above, .below").forEach((x) => x.classList.remove("above", "below"));
+    list.addEventListener("dragstart", (e) => {
+      const row = e.target.closest(".qj:not(.run)");
+      if (!row) return;
+      qDrag = row.dataset.id;
+      e.dataTransfer.setData(QMIME, qDrag);
+      e.dataTransfer.effectAllowed = "move";
+      row.classList.add("drag");
+    });
+    list.addEventListener("dragover", (e) => {
+      if (!qDrag) return;
+      const row = e.target.closest(".qj:not(.run)");
+      e.preventDefault();
+      clearMarks();
+      if (!row || row.dataset.id === qDrag) return;
+      const r = row.getBoundingClientRect();
+      row.classList.add(e.clientY < r.top + r.height / 2 ? "above" : "below");
+    });
+    list.addEventListener("drop", (e) => {
+      if (!qDrag) return;
+      e.preventDefault();
+      const row = list.querySelector(".above, .below"), id = qDrag;
+      clearMarks();
+      if (!row) return;
+      const ids = qData.waiting.map((j) => j.id).filter((x) => x !== id);
+      let to = ids.indexOf(row.dataset.id) + (row.classList.contains("below") ? 1 : 0);
+      qDrag = null;
+      qPost({ op: "move", id, to });
+    });
+    list.addEventListener("dragend", () => {
+      clearMarks();
+      list.querySelectorAll(".drag").forEach((x) => x.classList.remove("drag"));
+      if (qDrag) { qDrag = null; qSig = ""; renderQueue(); }
+    });
+  }
+  function toggleQueue(want) {
+    if (!qEl) buildQueue();
+    const open = want === undefined ? !qEl.classList.contains("open") : want;
+    qEl.classList.toggle("open", open);
+    document.getElementById("sa3-qbtn")?.classList.toggle("on", open);
+    clearInterval(qTimer); qTimer = null;
+    if (open) { qSig = ""; loadQueue(); qTimer = setInterval(loadQueue, 1000); }
+    paintQueueBadge();
+  }
+
   // ── progress: best-effort ETA from past render speeds (GET /sa3/progress) ──
   // The server only moves its projected finish time on real transitions (a sampling step
   // finished, decode started; bumps `rev`). Here we anchor t0/end on each new rev and animate
@@ -1012,6 +1238,7 @@
     const g = document.getElementById("sa3-generate");
     if (g) { if (n > 0) g.dataset.q = n; else delete g.dataset.q; }
     prog.waiting = n;
+    paintQueueBadge();
   }
   function progressFrame() {
     const fill = progEl.querySelector("i"), txt = progEl.querySelector(".txt");
@@ -1171,31 +1398,50 @@
         y: Math.random() * H | 0, h: 1 + (Math.random() * H * 0.06 | 0), dx: (Math.random() - 0.5) * W * 0.18 | 0,
       }));
     };
-    function frame(now) {
-      if (!still) requestAnimationFrame(frame);
-      if (!still && now - last < 33) return;    // ~30 fps is plenty for this
-      last = now;
-      const t = now / 1000;
-      let lo = 0, mid = 0, hi = 0, playing = false;
-      if (an) {
-        playing = [...document.querySelectorAll("audio")].some((a) => !a.paused && tapped.has(a));
-        if (playing) { an.getByteFrequencyData(buf); an.getByteTimeDomainData(tbuf); lo = band(30, 160); mid = band(300, 2000); hi = band(4000, 14000); }
-      }
-      follow("lo", lo); follow("mid", mid); follow("hi", hi);
-
-      // 1. waterfall: scroll left one pixel, paint the newest column at the right edge
+    // GPU budget: every repaint re-blurs all the backdrop-filter panels above
+    // this canvas, so the loop runs ~30 fps only while a clip plays, ~10 fps
+    // idle (painting several columns per frame so the crawl keeps its speed),
+    // and stops whenever the window loses focus (rAF alone only stops for a
+    // hidden tab, not a visible-but-unfocused window); focus restarts it.
+    const live = new Set();                     // media elements currently playing
+    for (const ev of ["play", "pause", "ended", "emptied"]) document.addEventListener(ev, (e) => {
+      if (e.target instanceof HTMLMediaElement) (ev === "play" ? live.add(e.target) : live.delete(e.target));
+    }, true);
+    let running = !still;
+    const wake = () => { if (!running && !still) { running = true; requestAnimationFrame(frame); } };
+    addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    const paintCol = (vals, gain) => {          // scroll left one pixel, paint the newest column at the right edge
       wg.drawImage(wf, -1, 0);
-      let vals;
-      if (playing) {
-        const bin = ctx.sampleRate / an.fftSize;
-        vals = rowF.map((f) => { const x = f / bin, i = Math.min(buf.length - 2, x | 0), fr = x - i; return Math.pow((buf[i] * (1 - fr) + buf[i + 1] * fr) / 255, 1.8) * 1.15; });
-      } else vals = idleCol(t);
-      const gain = playing ? 0.8 : 0.6;
       for (let y = 0; y < H; y++) {
         const li = Math.min(255, Math.max(0, Math.pow(Math.max(0, vals[y] * gain), 0.65) * 255)) | 0, p = y * 4;
         col.data[p] = LUT[li * 3]; col.data[p + 1] = LUT[li * 3 + 1]; col.data[p + 2] = LUT[li * 3 + 2]; col.data[p + 3] = 255;
       }
       wg.putImageData(col, W - 1, 0);
+    };
+    function frame(now) {
+      if (!still) {
+        if (!document.hasFocus()) { running = false; return; }   // frozen until the window gets focus again
+        requestAnimationFrame(frame);
+      }
+      let playing = false;
+      if (an) for (const a of live) if (!a.paused && tapped.has(a)) { playing = true; break; }
+      const dt = now - last;
+      if (!still && dt < (playing ? 33 : 100)) return;
+      last = now;
+      const t = now / 1000;
+      let lo = 0, mid = 0, hi = 0;
+      if (playing) { an.getByteFrequencyData(buf); an.getByteTimeDomainData(tbuf); lo = band(30, 160); mid = band(300, 2000); hi = band(4000, 14000); }
+      follow("lo", lo); follow("mid", mid); follow("hi", hi);
+
+      // 1. waterfall: one column per ~33 ms of elapsed time (capped, so a resume doesn't smear)
+      if (playing) {
+        const bin = ctx.sampleRate / an.fftSize;
+        paintCol(rowF.map((f) => { const x = f / bin, i = Math.min(buf.length - 2, x | 0), fr = x - i; return Math.pow((buf[i] * (1 - fr) + buf[i + 1] * fr) / 255, 1.8) * 1.15; }), 0.8);
+      } else {
+        const n = Math.min(4, Math.max(1, Math.round(dt / 33)));
+        for (let k = n - 1; k >= 0; k--) paintCol(idleCol(t - k * 0.033), 0.6);
+      }
 
       g.globalCompositeOperation = "source-over";
       g.drawImage(wf, 0, 0);
@@ -1203,7 +1449,7 @@
       // 2. glitch: on kicks while playing, at random moments when idle
       const hit = playing ? env.lo - lastLo > 0.06 && env.lo > 0.35 : t > nextIdle;
       lastLo = env.lo;
-      if (hit && glitch <= 0) { glitch = 3 + (Math.random() * 5 | 0); tear(); if (!playing) nextIdle = t + 2.5 + Math.random() * 6; }
+      if (hit && glitch <= 0) { glitch = playing ? 3 + (Math.random() * 5 | 0) : 1 + (Math.random() * 2 | 0); tear(); if (!playing) nextIdle = t + 2.5 + Math.random() * 6; }   // glitch counts frames: idle runs at 1/3 the rate
       if (glitch > 0) {
         glitch--;
         if (Math.random() < 0.4) tear();

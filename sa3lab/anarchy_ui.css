@@ -1,0 +1,110 @@
+/* Promptless (anarchy) panel — anarchy_ui.js. Same palette as studio.css (violet accent). */
+#sa3-anarchy { background: rgba(17,17,23,0.92); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+  padding: 12px 16px; margin: 2px 0 4px; font-size: 13px; color: #d6d6e2; transition: border-color .2s, box-shadow .2s; }
+#sa3-anarchy.an-on { border-color: rgba(155,140,255,0.45); box-shadow: 0 0 0 1px rgba(155,140,255,0.12), 0 0 24px rgba(155,140,255,0.08); padding-bottom: 16px; }
+
+/* header: switch + title */
+#sa3-anarchy .an-head { display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
+#sa3-anarchy .an-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+#sa3-anarchy .an-title b { font-size: 14px; color: #f0eeff; }
+#sa3-anarchy .an-sub { color: #7d7d90; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sa3-anarchy.an-on .an-sub { color: #b9b0ff; }
+#sa3-anarchy .an-switch { position: relative; flex: none; width: 36px; height: 20px; }
+#sa3-anarchy .an-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+#sa3-anarchy .an-switch i { position: absolute; inset: 0; border-radius: 10px; background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.12); transition: background .18s; }
+#sa3-anarchy .an-switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #9a9aac; transition: transform .18s, background .18s; }
+#sa3-anarchy .an-switch input:checked + i { background: linear-gradient(135deg, #9b8cff, #ff7ad9); border-color: transparent; }
+#sa3-anarchy .an-switch input:checked + i::after { transform: translateX(16px); background: #fff; }
+
+/* body: one field per block, label line on top, control full width below */
+#sa3-anarchy .an-body { margin-top: 16px; display: flex; flex-direction: column; gap: 16px; }
+#sa3-anarchy .an-body[hidden] { display: none; }
+#sa3-anarchy .an-field { display: flex; flex-direction: column; gap: 7px; }
+#sa3-anarchy .an-lab { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; }
+#sa3-anarchy .an-lab > span:first-child { color: #a3a3b5; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+#sa3-anarchy .an-r { color: #6f6f82; font-size: 11.5px; display: flex; align-items: center; }
+#sa3-anarchy .an-hint { color: #6f6f82; font-size: 11.5px; line-height: 1.4; }
+#sa3-anarchy .an-inline { display: flex; align-items: center; gap: 10px; }
+#sa3-anarchy .an-inline > span { color: #8b8b9c; font-size: 12px; flex: none; }
+#sa3-anarchy select, #sa3-anarchy input[type=number], #sa3-anarchy input[type=text] {
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; color: #e6e4f2;
+  padding: 6px 9px; font: 500 12.5px "JetBrains Mono", ui-monospace, monospace; }
+#sa3-anarchy select { width: 100%; }
+/* distance pill, top-right of a latent clip's spectrogram (anarchy_ui.js distPills) */
+.an-dist { position: absolute; top: 4px; right: 4px; z-index: 2; pointer-events: auto; cursor: help;
+  padding: 1px 6px; border-radius: 6px; font: 600 10.5px/1.5 "JetBrains Mono", ui-monospace, monospace;
+  color: hsl(var(--h) 90% 82%); background: hsla(var(--h), 70%, 22%, 0.88); border: 1px solid hsla(var(--h), 75%, 55%, 0.7); }
+#sa3-anarchy textarea.an-anchor { width: 100%; box-sizing: border-box; resize: vertical; min-height: 44px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; color: #e6e4f2;
+  padding: 6px 9px; font: 500 12.5px/1.4 "Inter", system-ui, sans-serif; }
+#sa3-anarchy textarea.an-anchor:focus { outline: none; border-color: rgba(155,140,255,0.5); }
+#sa3-anarchy .an-num { width: 76px; }
+#sa3-anarchy .an-grow { flex: 1; min-width: 0; }
+#sa3-anarchy input[type=range] { flex: 1; width: 100%; min-width: 80px; accent-color: #9b8cff; margin: 0; }
+#sa3-anarchy input[type=range]:disabled { opacity: .35; }
+#sa3-anarchy .an-val { color: #8b8b9c; font: 500 11.5px "JetBrains Mono", ui-monospace, monospace; min-width: 52px; text-align: right; }
+#sa3-anarchy .an-segs { display: flex; border: 1px solid rgba(255,255,255,0.09); border-radius: 8px; overflow: hidden; }
+#sa3-anarchy .an-seg { flex: 1; background: none; border: none; color: #a3a3b5; padding: 7px 10px; cursor: pointer;
+  font: 500 12px "JetBrains Mono", ui-monospace, monospace; white-space: nowrap; }
+#sa3-anarchy .an-full .an-seg { font-family: inherit; font-weight: 600; }
+#sa3-anarchy .an-seg + .an-seg { border-left: 1px solid rgba(255,255,255,0.09); }
+#sa3-anarchy .an-seg:hover:not(.on) { background: rgba(255,255,255,0.04); }
+#sa3-anarchy .an-seg.on { background: rgba(155,140,255,0.18); color: #ece8ff; }
+#sa3-anarchy .an-chk { display: flex; align-items: center; gap: 6px; color: #a3a3b5; font-size: 12px; cursor: pointer; }
+#sa3-anarchy .an-chk input { accent-color: #9b8cff; margin: 0; }
+#sa3-anarchy .an-btn { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); color: #e6e4f2;
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 12.5px; font-weight: 600; }
+#sa3-anarchy .an-btn:hover { border-color: rgba(155,140,255,0.6); background: rgba(155,140,255,0.1); }
+#sa3-anarchy .an-icon { padding: 4px 10px; font-size: 17px; line-height: 1; }
+#sa3-anarchy .an-sep { height: 1px; background: rgba(255,255,255,0.07); margin: 2px 0; }
+#sa3-anarchy .an-foot { color: #5f5f70; font-size: 11px; }
+#sa3-anarchy .an-warn { color: #ffb36b; font-size: 12px; }
+
+/* temperature: two-thumb range (anarchy_ui.js dualDown) + uniform / gaussian radios */
+#sa3-anarchy .an-dash { color: #5f5f70; margin: 0 6px; }
+#sa3-anarchy .an-dual { position: relative; height: 22px; cursor: pointer; touch-action: none; --lo: 0%; --hi: 100%; }
+#sa3-anarchy .an-dual::before { content: ""; position: absolute; left: 0; right: 0; top: 9px; height: 4px; border-radius: 2px;
+  background: rgba(255,255,255,0.1); }
+#sa3-anarchy .an-dual > b { position: absolute; top: 9px; height: 4px; border-radius: 2px; left: var(--lo); right: calc(100% - var(--hi));
+  background: linear-gradient(90deg, #9b8cff, #ff7ad9); }
+#sa3-anarchy .an-th { position: absolute; top: 3px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%;
+  background: #f0eeff; border: 2px solid #9b8cff; box-shadow: 0 1px 4px rgba(0,0,0,0.5); transition: transform .1s; }
+#sa3-anarchy .an-th[data-th="Tlo"] { left: var(--lo); }
+#sa3-anarchy .an-th[data-th="Thi"] { left: var(--hi); border-color: #ff7ad9; }
+#sa3-anarchy .an-dual:hover .an-th, #sa3-anarchy .an-dual.drag .an-th { transform: scale(1.12); }
+#sa3-anarchy .an-scale { position: relative; height: 12px; margin-top: -4px; }
+#sa3-anarchy .an-scale span { position: absolute; transform: translateX(-50%); color: #55556a;
+  font: 500 10px "JetBrains Mono", ui-monospace, monospace; }
+#sa3-anarchy .an-radios { display: flex; gap: 18px; margin-top: 2px; transition: opacity .15s; }
+#sa3-anarchy .an-radios.an-dim { opacity: .4; }
+#sa3-anarchy .an-radio { display: flex; align-items: center; gap: 7px; color: #a3a3b5; font-size: 12px; cursor: pointer; }
+#sa3-anarchy .an-radio input { position: absolute; opacity: 0; pointer-events: none; }
+#sa3-anarchy .an-radio i { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.25); position: relative; }
+#sa3-anarchy .an-radio input:checked + i { border-color: #9b8cff; }
+#sa3-anarchy .an-radio input:checked + i::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: #9b8cff; }
+#sa3-anarchy .an-radio:has(input:checked) { color: #ece8ff; }
+#sa3-anarchy .an-ladder { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+/* hover explainers: the "?" by each label, and the floating card (anarchy_ui.js showTip) */
+#sa3-anarchy .an-q { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-left: 6px;
+  border-radius: 50%; border: 1px solid rgba(255,255,255,0.18); color: #6f6f82; font: 700 9px/1 system-ui, sans-serif;
+  font-style: normal; vertical-align: 1px; cursor: help; }
+#sa3-anarchy .an-lab > span:first-child:hover .an-q { border-color: #9b8cff; color: #c4bbff; }
+#sa3-an-tip { position: fixed; z-index: 10000; max-width: 300px; padding: 8px 11px; border-radius: 8px; pointer-events: none;
+  background: #1d1b2b; border: 1px solid rgba(155,140,255,0.35); box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  color: #dcd8f0; font: 400 12px/1.45 system-ui, -apple-system, sans-serif; opacity: 0; transition: opacity .12s; }
+#sa3-an-tip.on { opacity: 1; }
+
+/* the Prompt box while Promptless is active: shows the live spec, read-only */
+.an-prompt-locked textarea { color: #c4bbff !important; font-family: "JetBrains Mono", ui-monospace, monospace !important;
+  font-size: 13px !important; cursor: default; opacity: .85; }
+
+/* source badges on clip cards + settings card (anarchy_ui.js badges / sa3SettingsExtra) */
+.an-badge { display: inline-block; font: 700 9.5px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .08em;
+  padding: 3px 5px 2px; border-radius: 4px; margin-right: 8px; vertical-align: 1px; }
+.an-badge.an-text { color: #9a9aac; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); }
+.an-badge.an-latent { color: #fff; background: linear-gradient(135deg, #9b8cff, #ff7ad9); box-shadow: 0 0 10px rgba(155,140,255,0.35); }
+.sa3-cap.an-latent-cap { color: #cfc6ff !important; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px !important; }
+.blk.an-latent-blk { box-shadow: inset 3px 0 0 rgba(155,140,255,0.55); }
