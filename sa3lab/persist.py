@@ -2,7 +2,8 @@
 
 Upstream keeps history in a per-session `gr.State`, so every reload starts empty.
 We persist each presented render as `<audio file>.json` (upstream's own entry
-dict: prompt, seed, settings, timing line, spectrogram) next to the audio in
+dict: prompt, seed, settings, timing line, spectrogram; library.py adds the
+"gen" regen block and the "label" score/tags) next to the audio in
 `output/gradio/` (= AI_Audio/outputs/sa3-gradio/), and on page load rebuild the
 current clip + history from the newest files.
 
@@ -37,7 +38,17 @@ def save(entry: dict) -> None:
         return
     _seen.add(key)
     try:
-        sidecar(entry["path"]).write_text(json.dumps(entry))
+        sc = sidecar(entry["path"])
+        data = dict(entry)
+        if sc.exists():      # keep a label / gen block already on disk (library.py)
+            try:
+                old = json.loads(sc.read_text())
+                for k in ("label", "gen", "analysis"):
+                    if k in old and k not in data:
+                        data[k] = old[k]
+            except Exception:
+                pass
+        sc.write_text(json.dumps(data))
     except Exception as e:  # never break a generation over bookkeeping
         print(f"[sa3lab] history save failed: {e}", flush=True)
 

@@ -1,12 +1,19 @@
 /* SA3 Studio skin. Loaded by studio.py on top of upstream's gradio UI. */
 :root { color-scheme: dark; }
-body, gradio-app {
-  background:
-    radial-gradient(1200px 600px at 85% -10%, rgba(155,140,255,0.10), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(255,111,181,0.06), transparent 60%),
-    #09090d !important;
-}
-.gradio-container { width: 100% !important; max-width: 1440px !important; margin: 0 auto !important; padding: 28px 36px 40px !important; }
+body { background: #09090d !important; }
+/* animated, sound-reactive glitch-spectrogram background (studio.js draws it at 1/3 res;
+   upscaled pixelated so it reads as chunky data, with CRT scanlines over it) */
+#sa3-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; image-rendering: pixelated; opacity: .9; }
+body::before { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0 1px, transparent 1px 3px); }
+body::after { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(5,5,8,0.55) 100%); }
+gradio-app { position: relative; z-index: 1; background: transparent !important; }
+gradio-app, .gradio-container, .gradio-container > .main, .gradio-container .contain, .app { background: transparent !important; }
+/* panels go slightly glassy so the light reads through */
+.block, .form, .sa3-stats, .sa3-player .blk { backdrop-filter: blur(14px); }
+.block:not(.sa3-player):not(.sa3-timing):not(.sa3-error):not(.sa3-queued):not(.sa3-history):not(.sa3-header):not(.sa3-footer):not(.sa3-sec-wrap) { background: rgba(17,17,23,0.72) !important; }
+.gradio-container { width: 100% !important; max-width: 1440px !important; margin: 0 auto !important; padding: 0 36px 40px !important; }
 .gradio-container > .main { max-width: none !important; width: 100% !important; padding: 0 !important; }
 footer { display: none !important; }
 
@@ -17,9 +24,6 @@ footer { display: none !important; }
 .sa3h-logo { width: 42px; height: 42px; filter: drop-shadow(0 6px 18px rgba(155,140,255,0.35)); }
 .sa3h-name { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: #f4f4fa; line-height: 1.15; }
 .sa3h-tag { font-size: 13px; color: #8b8b9c; margin-top: 2px; }
-.sa3h-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.sa3h-chips span { font-size: 12px; color: #b9b9c9; padding: 5px 11px; border-radius: 999px;
-  background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.07); }
 
 /* ── blocks & inputs ──────────────────────────────── */
 .block, .form { box-shadow: none !important; }
@@ -33,6 +37,28 @@ input[type=number] { font-family: "JetBrains Mono", ui-monospace, monospace !imp
 /* accordions → quiet cards */
 .label-wrap { font-weight: 600 !important; font-size: 14px !important; color: #d6d6e2 !important; }
 .label-wrap:hover { color: #ffffff !important; }
+
+/* sliders: hairline track, small ring thumb, mono min/max (gradio's are chunky + white) */
+.gradio-container input[type=range] { height: 16px; min-width: 0 !important; margin: 0; }
+.gradio-container input[type=range]::-webkit-slider-runnable-track { height: 2px !important; border-radius: 99px !important;
+  background: linear-gradient(to right, #a99cff var(--range_progress), rgba(255,255,255,0.10) var(--range_progress)) !important; }
+.gradio-container input[type=range]::-webkit-slider-thumb { width: 11px !important; height: 11px !important; margin-top: -4.5px !important;
+  background: #0d0d12 !important; border: 1.5px solid #c4bbff !important; box-shadow: 0 0 0 0 rgba(155,140,255,0) !important;
+  transition: box-shadow .15s, transform .12s, background .15s; }
+.gradio-container input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(155,140,255,0.16) !important; }
+.gradio-container input[type=range]:active::-webkit-slider-thumb { background: #c4bbff !important; transform: scale(1.1); box-shadow: 0 0 0 5px rgba(155,140,255,0.22) !important; }
+.gradio-container input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(155,140,255,0.35) !important; }
+.gradio-container input[type=range]::-moz-range-track { height: 2px !important; background: rgba(255,255,255,0.10) !important; }
+.gradio-container input[type=range]::-moz-range-progress { height: 2px !important; background: #a99cff !important; }
+.gradio-container input[type=range]::-moz-range-thumb { width: 9px !important; height: 9px !important; background: #0d0d12 !important; border: 1.5px solid #c4bbff !important; box-shadow: none !important; }
+.gradio-container .slider_input_container { gap: 8px !important; }
+.gradio-container .min_value, .gradio-container .max_value { font: 500 10.5px "JetBrains Mono", ui-monospace, monospace !important; color: #5f5f70 !important; margin: 0 !important; }
+.gradio-container .tab-like-container { border-color: rgba(255,255,255,0.07) !important; border-radius: 7px !important; overflow: hidden; }
+.gradio-container .tab-like-container input[type=number] { height: 24px !important; min-width: 44px !important; width: 52px; padding: 0 6px !important;
+  border: none !important; border-radius: 0 !important; background: rgba(0,0,0,0.25) !important; font-size: 12px !important; color: #e3e3ee !important; }
+.gradio-container .tab-like-container .reset-button { min-width: 22px !important; padding: 0 5px !important; color: #6f6f80 !important; font-size: 11px !important;
+  border-left-color: rgba(255,255,255,0.07) !important; }
+.gradio-container .tab-like-container .reset-button:hover:not(:disabled) { color: #e3e3ee !important; background: rgba(155,140,255,0.12) !important; }
 
 /* buttons */
 button.secondary { transition: background .15s, border-color .15s; }
@@ -49,8 +75,50 @@ button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
 #sa3-generate:active { transform: translateY(0); filter: brightness(0.97); }
 #sa3-generate::after { content: "⌘↵"; margin-left: 10px; font-size: 12px; opacity: .6; font-weight: 500; }
 
+/* centred action bar above the 40/60 columns (built by studio.py _layout):
+   Generate, Stop (only while a render runs), auto-play toggle, progress line */
+#sa3-top { position: sticky; top: 0; z-index: 30; align-items: center !important; flex-wrap: nowrap !important; gap: 16px !important;
+  margin: 0 -14px 12px !important; padding: 6px 14px !important; border-radius: 0 0 16px 16px;
+  background: rgba(9,9,13,0.66) !important; backdrop-filter: blur(16px); border-bottom: 1px solid rgba(255,255,255,0.05); }
+#sa3-top > .sa3-header { flex: 1 1 0 !important; min-width: 0 !important; }
+#sa3-top::after { content: ""; flex: 1 1 0; }          /* mirrors the header so the bar sits dead centre */
+#sa3-top .sa3h { padding: 0; flex-wrap: nowrap; }
+#sa3-top .sa3h-brand { gap: 11px; white-space: nowrap; }
+#sa3-top .sa3h-logo { width: 28px; height: 28px; }
+#sa3-top .sa3h-name { font-size: 16px; }
+#sa3-top .sa3h-tag { font-size: 11px; margin-top: 0; }
+#sa3-actions { position: relative; justify-content: center !important; align-items: center !important;
+  flex: 0 0 auto !important; flex-wrap: nowrap !important; gap: 12px !important; margin: 0 !important; padding: 4px 8px 9px !important;
+  width: auto !important; border-radius: 14px; background: rgba(255,255,255,0.025) !important; border: 1px solid rgba(255,255,255,0.06); }
+#sa3-actions #sa3-generate { min-height: 32px !important; height: 32px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 14.5px !important; border-radius: 10px !important; }
+#sa3-actions > #sa3-generate { flex: 0 0 320px !important; min-width: 0 !important; }
+#sa3-actions > .form, #sa3-actions > .block { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
+  background: none !important; border: none !important; backdrop-filter: none; }
+#sa3-autoplay label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a3a3b5; white-space: nowrap; cursor: pointer; padding: 0 4px; }
+#sa3-autoplay input { margin: 0 !important; }
+#sa3-out > * { min-width: 0; }
+/* hide via body:not(): gradio re-emits every rule with a .gradio-container
+   prefix, so a plain "#sa3-stop{display:none}" would outrank the busy rule */
+body:not(.sa3-busy) #sa3-stop { display: none !important; }
+body.sa3-busy #sa3-actions > #sa3-stop { flex: 0 0 110px !important; min-height: 32px; height: 32px; gap: 8px;
+  background: rgba(255,90,110,0.08) !important; border: 1px solid rgba(255,90,110,0.35) !important;
+  color: #ff8a9a !important; font-weight: 600 !important; border-radius: 10px !important; transition: background .15s, border-color .15s; }
+body.sa3-busy #sa3-stop:hover { background: rgba(255,90,110,0.16) !important; border-color: rgba(255,90,110,0.6) !important; color: #ffb0bb !important; }
+#sa3-stop::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
+
 /* ── output column ────────────────────────────────── */
-#sa3-out { position: sticky; top: 16px; align-self: flex-start; }
+#sa3-out { position: sticky; top: 66px; align-self: flex-start; }
+
+/* progress line under the action bar (studio.js polls /sa3/progress) */
+#sa3-progress { position: absolute; left: 12px; right: 12px; bottom: 1px; height: 8px; display: flex; align-items: center; gap: 10px;
+  opacity: 0; transition: opacity .3s; pointer-events: none; }
+#sa3-progress.on { opacity: 1 !important; }
+#sa3-progress .track { flex: 1; height: 3px; border-radius: 99px; background: rgba(255,255,255,0.06); overflow: hidden; }
+#sa3-progress .track i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #9b8cff, #ff6fb5);
+  box-shadow: 0 0 10px rgba(180,130,255,0.7); transition: width .35s linear; }
+#sa3-progress.wait .track i { width: 30% !important; animation: sa3-wait 1.4s ease-in-out infinite; }
+@keyframes sa3-wait { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+#sa3-progress .txt { font: 500 10.5px "JetBrains Mono", ui-monospace, monospace; color: #b9afff; white-space: nowrap; }
 .sa3-sec { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #7d7d8e; margin: 10px 2px 2px; }
 
 .sa3-player .blk { background: #0d0d12; border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 12px; }
@@ -69,25 +137,47 @@ audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 99
 .blk .ph { background: #fff !important; box-shadow: 0 0 10px rgba(255,255,255,.7) !important; }
 .sa3-player .blk .ph { top: 10px !important; }
 
-/* stats readout (built by studio.js from upstream's timing line) */
-.sa3-stats { background: #0d0d12; border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; padding: 14px 16px; }
-.sa3-stats .p { font-size: 14px; color: #e3e3ee; line-height: 1.45; margin-bottom: 4px; }
-.sa3-stats .neg { font-size: 12.5px; color: #8b8b9c; margin-bottom: 4px; }
-.sa3-stats .notes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
-.sa3-stats .notes span { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: rgba(155,140,255,0.10); color: #c4bbff; border: 1px solid rgba(155,140,255,0.22); }
-.sa3-stats .warn { font-size: 12.5px; color: #ffb35c; margin: 4px 0; }
-.sa3-stats .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0 12px; }
-.sa3-stats .kpis div { background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 9px 11px; }
-.sa3-stats .kpis b { display: block; font: 600 17px/1.2 "JetBrains Mono", ui-monospace, monospace; color: #f4f4fa; }
-.sa3-stats .kpis span { font-size: 11px; color: #7d7d8e; text-transform: uppercase; letter-spacing: 0.08em; }
-.sa3-stats .kpis .seed { cursor: pointer; transition: border-color .15s; }
-.sa3-stats .kpis .seed:hover { border-color: rgba(155,140,255,0.5); }
-.sa3-stats .kpis .seed:hover span::after { content: " · reuse"; color: #b9afff; }
-.sa3-stats .bar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.05); gap: 2px; }
+/* stats readout (built by studio.js from upstream's timing line): two compact lines */
+.sa3-stats { background: rgba(13,13,18,0.7); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 9px 12px; }
+.sa3-stats .p { font-size: 13px; color: #e3e3ee; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa3-stats .neg { font-size: 12px; color: #8b8b9c; margin-top: 2px; }
+.sa3-stats .warn { font-size: 12px; color: #ffb35c; margin-top: 3px; }
+.sa3-stats .row { display: flex; align-items: center; gap: 14px; margin-top: 6px; }
+.sa3-stats .k { font-size: 10.5px; color: #6f6f80; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+.sa3-stats .k b { font: 600 13px "JetBrains Mono", ui-monospace, monospace; color: #ececf4; margin-right: 5px; text-transform: none; letter-spacing: 0; }
+.sa3-stats .k.seed { cursor: pointer; border-radius: 6px; padding: 1px 4px; margin: -1px -4px; transition: background .15s; }
+.sa3-stats .k.seed:hover { background: rgba(155,140,255,0.15); color: #b9afff; }
+.sa3-stats .bar { flex: 1; min-width: 60px; display: flex; height: 5px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.05); gap: 2px; cursor: help; }
 .sa3-stats .bar i { display: block; min-width: 3px; }
 .sa3-stats .bar .t5 { background: #ff6fb5; } .sa3-stats .bar .smp { background: #9b8cff; } .sa3-stats .bar .dec { background: #4fd1c5; } .sa3-stats .bar .oth { background: #3a3a48; }
-.sa3-stats .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: #8b8b9c; }
-.sa3-stats .legend em { font-style: normal; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+
+/* dataset label strip under every clip: score 0-10 + tags (studio.js, saved by library.py) */
+.sa3-lab { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; cursor: default; }
+.sa3-lab .sc { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); }
+.sa3-lab .sc button { width: 21px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  font: 600 10.5px "JetBrains Mono", ui-monospace, monospace; color: #5f5f70; transition: background .1s, color .1s; }
+.sa3-lab .sc button:hover { background: rgba(155,140,255,0.22); color: #fff; }
+.sa3-lab .sc button.lit { color: #c4bbff; background: rgba(155,140,255,0.10); }
+.sa3-lab .sc button.on { color: #0b0b10; background: linear-gradient(135deg, #9b8cff, #ff6fb5); }
+.sa3-lab .tags { display: contents; }
+.sa3-lab .tag { display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px; color: #d6d0ff; padding: 1px 3px 1px 9px; border-radius: 999px;
+  background: rgba(155,140,255,0.12); border: 1px solid rgba(155,140,255,0.25); }
+.sa3-lab .tag button { border: 0; background: transparent; color: #8b84c4; cursor: pointer; font-size: 13px; line-height: 1; width: 16px; height: 16px; border-radius: 99px; padding: 0; }
+.sa3-lab .tag button:hover { color: #fff; background: rgba(255,90,110,0.5); }
+/* auto BPM chip (tempo.py): green ≤1.5 % off the prompt's BPM, yellow ≤4 %, orange beyond */
+.sa3-lab .tag.bpm { padding: 1px 9px; font: 600 11px "JetBrains Mono", ui-monospace, monospace; cursor: help;
+  color: #b9b9c9; background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.12); }
+.sa3-lab .tag.bpm.green  { color: #7ee2a8; background: rgba(60,200,120,0.12); border-color: rgba(60,200,120,0.4); }
+.sa3-lab .tag.bpm.yellow { color: #f2d36b; background: rgba(240,200,60,0.11); border-color: rgba(240,200,60,0.4); }
+.sa3-lab .tag.bpm.orange { color: #ffa462; background: rgba(255,140,60,0.12); border-color: rgba(255,140,60,0.42); }
+.sa3-lab .tag.bpm.nobeat, .sa3-lab .tag.bpm.pend { color: #6f6f80; font-weight: 500; }
+.sa3-lab .add { width: 86px; min-width: 0; height: 22px; padding: 0 9px !important; font-size: 11.5px !important; border-radius: 999px !important;
+  background: transparent !important; border: 1px dashed rgba(255,255,255,0.14) !important; color: #e9e9f1 !important; box-shadow: none !important; }
+.sa3-lab .add:focus { width: 150px; border-style: solid !important; border-color: rgba(155,140,255,0.6) !important; outline: none; }
+#sa3-hist .sa3-lab { margin-top: 6px; }
+#sa3-hist .sa3-lab .sc button { width: 18px; height: 17px; font-size: 9.5px; }
+#sa3-hist .sa3-lab:not(.scored) .sc { opacity: .55; }
+#sa3-hist .blk:hover .sa3-lab .sc { opacity: 1; }
 
 /* empty slots collapse */
 .sa3-timing.is-empty, .sa3-error.is-empty, .sa3-queued.is-empty, .sa3-history.is-empty { display: none !important; }
@@ -143,10 +233,25 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
 /* loading state: one status overlay (on the player), none on the side slots */
 .sa3-timing > .wrap, .sa3-error > .wrap, .sa3-queued > .wrap, .sa3-history > .wrap { display: none !important; }
 .block.sa3-timing, .block.sa3-error, .block.sa3-queued, .block.sa3-history { border: none !important; background: none !important; }
-.sa3-player > .wrap { background: rgba(9,9,13,0.72) !important; backdrop-filter: blur(6px); border-radius: 16px; }
+/* While a render runs, the previous clip stays fully visible and playable:
+   gradio fades every pending output to opacity .2 and lays a status overlay
+   on top; undo the fade, make the overlay click-through and transparent, and
+   reduce it to a progress pill + a thin progress line along the top edge. */
+#sa3-out .html-container.pending { opacity: 1 !important; }
+.sa3-player > .wrap { background: transparent !important; backdrop-filter: none !important; pointer-events: none !important;
+  inset: 0 !important; height: auto !important; border-radius: 16px; overflow: hidden; }
+.sa3-player:not(.is-busy) > .wrap > :not(.progress-text):not(.eta-bar):not(.meta-text):not(.meta-text-center) { display: none !important; }
 .sa3-player > .wrap .progress-text, .sa3-player > .wrap .meta-text, .sa3-player > .wrap .meta-text-center {
-  font: 500 13px "JetBrains Mono", ui-monospace, monospace !important; color: #c4bbff !important; }
-.sa3-player > .wrap .eta-bar { background: linear-gradient(90deg, rgba(155,140,255,0.25), rgba(255,111,181,0.25)) !important; opacity: 1 !important; }
+  font: 500 12px "JetBrains Mono", ui-monospace, monospace !important; color: #c4bbff !important; }
+.sa3-player:not(.is-busy) > .wrap .progress-text, .sa3-player:not(.is-busy) > .wrap .meta-text, .sa3-player:not(.is-busy) > .wrap .meta-text-center {
+  top: 72px !important; right: 22px !important; left: auto !important;   /* spectrogram's top-right corner */ bottom: auto !important; transform: none !important;
+  padding: 4px 10px !important; border-radius: 999px; background: rgba(13,13,18,0.9); border: 1px solid rgba(155,140,255,0.3); }
+.sa3-player > .wrap .eta-bar { top: 0 !important; bottom: auto !important; height: 3px !important; opacity: 1 !important;
+  background: linear-gradient(90deg, #9b8cff, #ff6fb5) !important; }
+.sa3-player:not(.is-busy) > .wrap::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, transparent, rgba(155,140,255,0.8), rgba(255,111,181,0.8), transparent);
+  background-size: 50% 100%; background-repeat: no-repeat; animation: sa3-scan 1.4s ease-in-out infinite; }
+@keyframes sa3-scan { from { background-position: -100% 0; } to { background-position: 200% 0; } }
 .block.sa3-player { border: none !important; background: none !important; padding: 0 !important; }
 
 /* first render: a living placeholder while the model works */
@@ -155,3 +260,8 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
   background-size: 250% 100% !important; animation: sa3-sweep 1.8s linear infinite; }
 .sa3-player.is-busy > .wrap { background: transparent !important; backdrop-filter: none; }
 @keyframes sa3-sweep { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+
+/* gradio's own progress pill, eta bar and scan line are replaced by #sa3-progress */
+.sa3-player > .wrap .progress-text, .sa3-player > .wrap .meta-text, .sa3-player > .wrap .meta-text-center,
+.sa3-player > .wrap .eta-bar { display: none !important; }
+.sa3-player:not(.is-busy) > .wrap::before { display: none !important; }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SA3 Studio: dark skin over upstream's MLX gradio UI, localhost only.
-#   sa3lab/studio                 # medium + same-l on http://127.0.0.1:7860
+#   sa3lab/studio                 # medium + same-l, 120 s, on http://127.0.0.1:7860
 #   sa3lab/studio --dit sm-music  # any upstream sa3_gradio.py flag passes through
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

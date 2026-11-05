@@ -10,6 +10,17 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - renders the spectrogram at full HD (hispec.py) instead of upstream's ~16 col/s,
 - persists every render's entry as a sidecar and restores the last renders on
   page load (persist.py), since upstream keeps history only in session state,
+  and prefills the prompt box with the last render's prompt,
+- defaults Duration to 120 s (the blind-bench winner, see main()),
+- adds a Stop button (shown only while a render runs) that interrupts the
+  MLX job between sampler steps (see the "stop" block below),
+- turns every render into a labelled dataset row (library.py): the sidecar gets
+  a "gen" block with everything needed to regenerate it and a "label" block
+  (0-10 score + free-text tags) that the per-clip label strip saves instantly,
+- serves a live progress estimate (library.py) from past render speeds and
+  the sampler's real step count,
+- lays out one sticky top line (logo + a centred Generate / Stop / auto-play
+  bar) above 40/60 columns (see _layout),
 - injects a dark theme, CSS, fonts and a small JS layer at `launch()`
   (gradio 6 takes theme/css/js/head there), and forces localhost-only,
   no share link.
@@ -20,7 +31,9 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import sys
+import threading
 from pathlib import Path
 
 AI_AUDIO = Path(__file__).resolve().parents[1]
@@ -34,6 +47,7 @@ import sa3_gradio as up  # noqa: E402  (upstream UI module)
 
 sys.path.insert(0, str(Path(__file__).parent))
 import hispec  # noqa: E402  (full-HD dadaspec)
+import library  # noqa: E402  (dataset sidecars, label routes, progress)
 import persist  # noqa: E402  (history across reloads)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
@@ -131,6 +145,134 @@ def _button(a, kw):
     return a, kw
 
 
+def _add_stop_button():
+    """Create the Stop button right after Generate (same column), CSS-hidden until busy."""
+    orig = gr.Button.__init__
+
+    @functools.wraps(orig)
+    def init(self, *a, **kw):
+        orig(self, *a, **kw)
+        if kw.get("elem_id") == "sa3-generate":
+            gr.Button("Stop", elem_id="sa3-stop", variant="secondary", size="lg")
+    gr.Button.__init__ = init
+
+
+# ── stop ───────────────────────────────────────────────────────────────────
+# gradio's `cancels=` clears the UI and drops queued renders, but can't interrupt
+# a running sync handler, and the MLX work runs on upstream's single owner
+# thread anyway. So Stop is also cooperative: the sampler checks a flag before
+# every step (and once more before decoding) and raises `Stopped`; nothing is
+# saved, and a new render waits at most one sampler step for the MLX thread.
+#
+# Every Generate/auto-advance click starts a new epoch; the chained pregen
+# (Infinite Radio) inherits the epoch of the click that spawned it. Stop marks
+# every epoch up to now as stopped, so it kills the running render AND the
+# follow-up pregen, while a Generate clicked right after Stop runs normally.
+class Stopped(Exception):
+    pass
+
+
+_stop = {"epoch": 0, "stopped_upto": 0, "run": None}
+_tl = threading.local()
+
+
+def _check_stop():
+    run = _stop["run"]
+    if run is not None and _stop["stopped_upto"] >= run:
+        raise Stopped("generation stopped")
+
+
+def _install_stop_hooks():
+    """Stop checks, plus (library.py) live progress and the regen-metadata capture:
+    run_generation's exact arguments + measured timings land in `_tl.gen` on the
+    handler thread, and _wire_handlers attaches them to the new entry."""
+    orig_call = up.mlx_call
+    gen_sig = inspect.signature(up.run_generation)
+
+    def mlx_call(fn, *a, **kw):
+        if fn is not up.run_generation:
+            return orig_call(fn, *a, **kw)
+        epoch = getattr(_tl, "epoch", None)
+        bound = gen_sig.bind(*a, **kw)
+        bound.apply_defaults()
+
+        def run(*a, **kw):          # executes on the MLX owner thread
+            _stop["run"] = epoch
+            library.progress_start(bound)
+            try:
+                _check_stop()       # a stopped chain's pregen dies before T5
+                return fn(*a, **kw)
+            finally:
+                _stop["run"] = None
+                library.progress_end()
+        res = orig_call(run, *a, **kw)
+        try:
+            _tl.gen = library.gen_record(bound, res[1] if isinstance(res, tuple) else None)
+        except Exception as e:      # never break a generation over bookkeeping
+            print(f"[sa3lab] gen record failed: {e}", flush=True)
+        return res
+    up.mlx_call = mlx_call
+
+    orig_sample = up.sample_flow_pingpong
+
+    def sample(*a, before_step=None, **kw):
+        def bs(i):
+            _check_stop()
+            library.progress_step(i)
+            if before_step is not None:
+                before_step(i)
+        return orig_sample(*a, before_step=bs, **kw)
+    up.sample_flow_pingpong = sample
+
+    orig_dec = up.get_decoder
+
+    def get_decoder(*a, **kw):
+        _check_stop()
+        library.progress_phase("decode")
+        return orig_dec(*a, **kw)
+    up.get_decoder = get_decoder
+
+
+def _wire_handlers(demo):
+    """Wrap generate/promote/pregen: tag them with stop epochs, attach the captured
+    regen metadata to the entry each one produced, and persist presented entries.
+    Also hooks the Stop button up."""
+    gen_fns = []
+    for bf in demo.fns.values():
+        if bf.name not in ("generate", "promote", "pregen"):
+            continue
+        gen_fns.append(bf)
+        orig = bf.fn
+
+        def wrapped(*a, _orig=orig, _new=bf.name != "pregen"):
+            if _new:
+                _stop["epoch"] += 1
+            _tl.epoch = _stop["epoch"]
+            _tl.gen = None
+            slot = "current" if _new else "queued"
+            before = (a[-1].get(slot) or {}).get("key") if isinstance(a[-1], dict) else None
+            out = _orig(*a)
+            state = out[-1] if isinstance(out, tuple) else None
+            entry = state.get(slot) if isinstance(state, dict) else None
+            if entry and entry.get("key") != before:
+                if _tl.gen and "gen" not in entry:
+                    entry["gen"] = _tl.gen
+                if _new:            # presented now: becomes a dataset row
+                    persist.save(entry)
+            return out
+        functools.update_wrapper(wrapped, orig)
+        bf.fn = wrapped
+
+    stop_btn = next(b for b in demo.blocks.values()
+                    if isinstance(b, gr.Button) and b.elem_id == "sa3-stop")
+
+    def stop():
+        _stop["stopped_upto"] = _stop["epoch"]
+    with demo:   # cancels also drops renders still waiting in gradio's queue
+        stop_btn.click(stop, queue=False, show_progress="hidden",
+                       cancels=[bf.get_config() for bf in gen_fns])
+
+
 HEADER = """
 <div class="sa3h">
   <div class="sa3h-brand">
@@ -146,11 +288,8 @@ HEADER = """
     </svg>
     <div>
       <div class="sa3h-name">SA3 Studio</div>
-      <div class="sa3h-tag">Stable Audio 3 · MLX on Apple Silicon · local only</div>
+      <div class="sa3h-tag">Stable Audio 3 · MLX · local</div>
     </div>
-  </div>
-  <div class="sa3h-chips">
-    <span>Text → audio</span><span>Audio → audio</span><span>Inpainting</span><span>LoRA</span>
   </div>
 </div>
 """
@@ -268,27 +407,105 @@ JS = (Path(__file__).with_name("studio.js")).read_text()
 
 
 def _add_restore_on_load(demo, render_player):
-    """On every page load, fill the empty session with the newest renders on disk."""
+    """On every page load, fill the empty session with the newest renders on disk
+    and prefill the prompt box with the last render's prompt."""
     blocks = list(demo.blocks.values())
     st = next(b for b in blocks if isinstance(b, gr.State)
               and isinstance(b.value, dict) and "history" in b.value)
     slot = {c: next(b for b in blocks if isinstance(b, gr.HTML) and c in (b.elem_classes or []))
             for c in ("sa3-player", "sa3-timing", "sa3-history")}
 
-    def restore(state):
+    prompt_box = next(b for b in blocks if isinstance(b, gr.Textbox) and b.label == "Prompt")
+
+    def restore(state, prompt):
         if state.get("current") is not None:   # session already has renders
-            return gr.update(), gr.update(), gr.update(), state
+            return gr.update(), gr.update(), gr.update(), state, gr.update()
         entries = persist.load_recent(up.OUTPUT_DIR, up, hispec.render_spectrogram_png,
                                       HISTORY_ON_LOAD)
         if not entries:
-            return gr.update(), gr.update(), gr.update(), state
+            return gr.update(), gr.update(), gr.update(), state, gr.update()
         state = {"current": entries[0], "queued": None, "history": entries[1:]}
+        # prefill the last render's prompt, unless something is already typed
+        last = entries[0].get("prompt") or ""
+        prefill = gr.update(value=last) if last and not (prompt or "").strip() else gr.update()
         return (render_player(entries[0]), entries[0].get("timing", ""),
-                up.render_history(state["history"]), state)
+                up.render_history(state["history"]), state, prefill)
 
     with demo:
-        demo.load(restore, inputs=[st],
-                  outputs=[slot["sa3-player"], slot["sa3-timing"], slot["sa3-history"], st])
+        demo.load(restore, inputs=[st, prompt_box],
+                  outputs=[slot["sa3-player"], slot["sa3-timing"], slot["sa3-history"], st,
+                           prompt_box])
+
+
+# ── layout: centred action bar over 40/60 columns ──────────────────────
+PREFS = Path(up.OUTPUT_DIR) / ".studio_prefs.json"
+
+
+def _prefs() -> dict:
+    try:
+        return json.loads(PREFS.read_text())
+    except Exception:
+        return {}
+
+
+def _layout(demo):
+    """40/60 columns (controls / output); Generate + Stop + the auto-play toggle move out of the
+    output column into a centred bar, on one sticky top line with the header. Blocks are re-parented
+    in the tree before launch (gradio builds its layout config at launch)."""
+    blocks = list(demo.blocks.values())
+    out_col = next(b for b in blocks if isinstance(b, gr.Column) and b.elem_id == "sa3-out")
+    main_row = out_col.parent
+    for c in main_row.children:          # 40 / 60: controls left, output right
+        if isinstance(c, gr.Column):
+            c.scale = 3 if c is out_col else 2
+    gen = next(b for b in blocks if isinstance(b, gr.Button) and b.elem_id == "sa3-generate")
+    stop = next(b for b in blocks if isinstance(b, gr.Button) and b.elem_id == "sa3-stop")
+    opts = next(b for b in blocks if isinstance(b, gr.CheckboxGroup) and b.label == "Playback")
+
+    with demo:
+        with gr.Row(elem_id="sa3-actions") as bar:
+            autoplay = gr.Checkbox(label="Auto-play when ready", value=True,
+                                   elem_id="sa3-autoplay", container=False, scale=0)
+
+        # the toggle mirrors "Auto-play" in Playback & files (both ways, user edits only)
+        def from_toggle(on, cur):
+            cur = [o for o in (cur or []) if o != "Auto-play"] + (["Auto-play"] if on else [])
+            PREFS.write_text(json.dumps(_prefs() | {"autoplay": bool(on)}))
+            return gr.update(value=cur)
+        autoplay.input(from_toggle, inputs=[autoplay, opts], outputs=[opts],
+                       queue=False, show_progress="hidden")
+
+        def from_opts(cur):
+            on = "Auto-play" in (cur or [])
+            PREFS.write_text(json.dumps(_prefs() | {"autoplay": on}))
+            return gr.update(value=on)
+        opts.input(from_opts, inputs=[opts], outputs=[autoplay], queue=False,
+                   show_progress="hidden")
+
+        def load_pref(cur):
+            on = _prefs().get("autoplay", True)
+            cur = [o for o in (cur or []) if o != "Auto-play"] + (["Auto-play"] if on else [])
+            return gr.update(value=on), gr.update(value=cur)
+        demo.load(load_pref, inputs=[opts], outputs=[autoplay, opts], queue=False,
+                  show_progress="hidden")
+
+    for b in (gen, stop):
+        b.parent.children.remove(b)
+        b.parent = bar
+    bar.children[:0] = [gen, stop]
+    # header (logo + title) and the action bar share one sticky top strip
+    header = next(b for b in blocks if isinstance(b, gr.HTML) and "sa3-header" in (b.elem_classes or []))
+    with demo:
+        with gr.Row(elem_id="sa3-top", equal_height=False) as top:
+            pass
+    root = header.parent
+    for b in (bar, top):
+        b.parent.children.remove(b)
+    root.children.insert(root.children.index(header), top)
+    top.parent = root
+    root.children.remove(header)
+    top.children[:] = [header, bar]
+    header.parent = bar.parent = top
 
 
 def main():
@@ -299,24 +516,22 @@ def main():
     _wrap_init(gr.Accordion, _accordion)
     _wrap_init(gr.HTML, _html)
     _wrap_init(gr.Button, _button)
+    _add_stop_button()
     gr.Markdown = _markdown_factory(gr.Markdown)
 
     up.render_spectrogram_png = hispec.render_spectrogram_png  # sa3_gradio imported it by name
-
-    # persist each newly presented render (the main player is rendered once per new entry)
-    orig_render_player = up.render_player
-
-    def render_player(entry, *a, **kw):
-        if not kw.get("small"):
-            persist.save(entry)
-        return orig_render_player(entry, *a, **kw)
-    up.render_player = render_player
+    library.init(up)
+    library.install_routes()
+    _install_stop_hooks()
+    orig_render_player = up.render_player   # new entries are persisted in _wire_handlers
     theme = build_theme()
     out_real = str(up.OUTPUT_DIR.resolve())
     orig_launch = gr.Blocks.launch
 
     def launch(self, *a, **kw):
         _add_restore_on_load(self, orig_render_player)
+        _wire_handlers(self)
+        _layout(self)
         kw.update(share=False, server_name="127.0.0.1", theme=theme, css=CSS, js=JS)
         kw["allowed_paths"] = list(kw.get("allowed_paths") or []) + [out_real]
         print("SA3 Studio → http://127.0.0.1:%s" % (kw.get("server_port") or 7860), flush=True)
@@ -326,6 +541,11 @@ def main():
     argv = sys.argv[1:]
     if "--dit" not in argv:
         argv += ["--dit", "medium"]
+    # Sampling defaults from the blind A/B bench (outputs/sa3_bench_quality, logged in the
+    # research doc): 120 s renders scored best; CFG 3, the base:ARC merge and the
+    # squeakfix decoder LoRA did not beat CFG 1 / 8 steps / stock SAME-L, so those stay.
+    if "--default-seconds" not in argv:
+        argv += ["--default-seconds", "120"]
     if "--port" not in argv:
         argv += ["--port", "7860"]
     if "--no-share" not in argv:
