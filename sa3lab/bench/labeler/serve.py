@@ -73,8 +73,42 @@ class Handler(SimpleHTTPRequestHandler):
                             "auto": read_json(FOLDER / "autoscores.json", {})})
         elif path.endswith(".json"):  # keep the key off the plain file route
             self.send_json({"error": "not found"}, 404)
+        elif path.endswith(".wav") and (FOLDER / path.lstrip("/")).is_file():
+            self.send_audio(FOLDER / path.lstrip("/"))
         else:
             super().do_GET()
+
+    def send_audio(self, f):
+        """Byte-range responses: without them Chrome can't seek in <audio> (scrubber, synced A/B)."""
+        size = f.stat().st_size
+        start, end, status = 0, size - 1, 200
+        rng = self.headers.get("Range", "")
+        if rng.startswith("bytes="):
+            a, _, b = rng[6:].split(",")[0].partition("-")
+            if a:
+                start, end = int(a), int(b) if b else size - 1
+            else:
+                start = size - int(b)
+            end, status = min(end, size - 1), 206
+        self.send_response(status)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with open(f, "rb") as fh:
+            fh.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0:
+                    chunk = fh.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def do_POST(self):
         port = self.server.server_address[1]

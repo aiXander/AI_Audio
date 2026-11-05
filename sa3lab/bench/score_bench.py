@@ -68,23 +68,23 @@ def main():
     from transformers import ClapModel, ClapProcessor
     clap = ClapModel.from_pretrained("laion/larger_clap_music").eval()
     proc = ClapProcessor.from_pretrained("laion/larger_clap_music")
-    with torch.no_grad():
-        ti = proc(text=[prompts[k]["text"] for k in prompts], return_tensors="pt", padding=True)
-        temb = torch.nn.functional.normalize(clap.get_text_features(**ti), dim=-1)
-    temb = dict(zip(prompts, temb))
 
     rows = []
     for i, r in enumerate(files):
         path = OUT / r["file"]
         x, sr = sf.read(path, dtype="float32"); assert sr == SR
         row = dict(r, **signal_metrics(x))
-        row.update({k: float(v) for k, v in aes.forward([{"path": str(path)}])[0].items()})
+        row.update({k: float(v) for k, v in aes.forward([{"path": torch.from_numpy(x.T.copy()), "sample_rate": SR}])[0].items()})
         y = resample_poly(x.mean(1), 160, 147)  # 44.1k -> 48k
         wins = [y[s: s + 480000] for s in range(0, max(len(y) - 480000, 0) + 1, 480000)]
         with torch.no_grad():
-            ai = proc(audio=wins, sampling_rate=48000, return_tensors="pt")
-            aemb = torch.nn.functional.normalize(clap.get_audio_features(**ai), dim=-1).mean(0)
-        row["clap"] = float(torch.nn.functional.normalize(aemb, dim=0) @ temb[r["prompt"]])
+            # full forward: returns the projected, contrastive embeddings (text_embeds / audio_embeds)
+            ai = proc(text=[prompts[r["prompt"]]["text"]], audio=wins, sampling_rate=48000,
+                      return_tensors="pt", padding=True)
+            out = clap(**ai)
+            aemb = torch.nn.functional.normalize(out.audio_embeds, dim=-1).mean(0)
+            temb = torch.nn.functional.normalize(out.text_embeds[0], dim=0)
+        row["clap"] = float(torch.nn.functional.normalize(aemb, dim=0) @ temb)
         rows.append(row)
         print(f"[{i+1}/{len(files)}] {r['file']}  PQ {row['PQ']:.2f}  CE {row['CE']:.2f}  "
               f"clap {row['clap']:.3f}  ton95 {row['tonality_p95_dB']:.1f}", flush=True)
@@ -120,7 +120,7 @@ def main():
     key_path = OUT / "listen" / "blind_key.json"
     if key_path.exists():  # machine scores per blind clip, shown on the page after Reveal
         by_file = {r["file"]: r for r in rows}
-        auto = {clip: {m: by_file[k["file"]][m] for m in metrics} for clip, k in json.loads(key_path.read_text()).items()
+        auto = {clip: {m: float(by_file[k["file"]][m]) for m in metrics} for clip, k in json.loads(key_path.read_text()).items()
                 if k["file"] in by_file}
         (OUT / "listen" / "autoscores.json").write_text(json.dumps(auto, indent=1))
     print("\n".join(lines))

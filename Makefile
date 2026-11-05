@@ -2,7 +2,7 @@ PORT ?= 7860
 URL  := http://127.0.0.1:$(PORT)/?__theme=dark
 UP   := curl -s -o /dev/null http://127.0.0.1:$(PORT)/
 
-.PHONY: start stop help
+.PHONY: start stop push pull help
 .DEFAULT_GOAL := help
 
 help: ## List targets
@@ -19,3 +19,9 @@ start: ## Launch SA3 Studio (sa3lab/studio) and open it in Chrome; Ctrl-C stops 
 
 stop: ## Stop a SA3 Studio running in the background
 	@pkill -f "sa3lab/studio.py" && echo "SA3 Studio stopped" || echo "SA3 Studio was not running"
+
+push: ## Commit + push every submodule, then AI_Audio (make push m="message")
+	@scripts/sync.sh push "$(m)"
+
+pull: ## Pull AI_Audio and every submodule (on main), e.g. after the other machine pushed
+	@scripts/sync.sh pull
