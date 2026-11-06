@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SA3 Arranger (mini-DAW for rough song sketches → SA3 audio-to-audio), own process + port.
+#   sa3lab/arranger/arranger            # → http://127.0.0.1:7861
+#   sa3lab/arranger/arranger --port N
+# Restarting it never touches the studio. Server + why: server.py docstring.
+set -e
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$HERE/../../stable-audio-3/optimized/mlx/.venv/bin/python" "$HERE/server.py" "$@"

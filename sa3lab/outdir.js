@@ -3,7 +3,11 @@
   // Switching: POST /sa3/outdir, then the hidden apply button reloads the history column
   // and the hidden destination textbox; studio.js's Library rows are refetched.
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  let state = { active: "", folders: [] }, pop = null;
+  let state = { active: "", folders: [], root: "" }, pop = null;
+  // hover copy icon per row: a <span class="sa3-cp"> (no nested <button>), so studio.js's
+  // capture-phase copy handler copies data-copy and stops the click before it switches folders
+  const COPY = '<svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M10.5 3.5v-.2A1.3 1.3 0 0 0 9.2 2H3.8A1.3 1.3 0 0 0 2.5 3.3v5.4A1.3 1.3 0 0 0 3.8 10h.2" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>';
+  const absPath = (rel) => (state.root ? state.root.replace(/\/$/, "") + (rel === "." ? "" : "/" + rel) : rel);
   const ICON = '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M1.5 4.5a1 1 0 0 1 1-1h3.6l1.4 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/></svg>';
 
   async function refresh() {
@@ -19,7 +23,8 @@
     pop.innerHTML = `<div class="od-h">Output folder <span>view + destination of new renders</span></div>
       <div class="od-list">${state.folders.map((f) => `
         <button type="button" class="od-row${f.rel === state.active ? " on" : ""}" data-rel="${esc(f.rel)}">
-          <span class="od-name">${esc(f.rel)}</span><span class="od-n">${f.n}</span></button>`).join("")}</div>
+          <span class="od-name">${esc(f.rel)}</span><span class="od-end"><span class="sa3-cp od-cp" role="button"
+            data-copy="${esc(absPath(f.rel))}" title="Copy full path">${COPY}</span><span class="od-n">${f.n}</span></span></button>`).join("")}</div>
       <form class="od-new"><input type="text" placeholder="new folder, e.g. anarchy/my-session" spellcheck="false">
         <button type="submit">Create</button></form>
       <div class="od-foot">Renders already queued keep their folder.</div>`;
@@ -79,6 +84,40 @@
     btn.addEventListener("click", () => toggle());
     stack.appendChild(btn);
   }
+  // Live view: a render that lands in the active folder from outside this tab (another tab,
+  // a script posting to /generate such as anarchy/enqueue.py) never reaches this page's gradio
+  // session, so when the folder's newest finished render isn't on the page, reload the history
+  // the way a folder switch does. One try per new render, so a name that never shows up can't
+  // cause a reload loop. It holds off only when the reload would lose something:
+  // - this tab's own render is running/queued (gradio delivers that one itself, then we catch up),
+  // - a clip you're playing would drop off the list: the reload shows the newest HISTORY_ON_LOAD
+  //   (10), and studio.js's keepPlaying() carries a playing clip across the re-render only if it
+  //   is still in the list, so a clip among the first 9 rows keeps playing, an older one waits,
+  // - a tag box holds text you haven't committed with Enter (an empty focused box is fine).
+  // Hidden tabs reload too (nobody is reading them), and a tab coming back checks at once.
+  // (These holds used to be stricter: any playing clip, any focused tag box or a hidden tab
+  // blocked it, which in practice meant new renders almost never appeared.)
+  const shownName = (a) => a.dataset.name || decodeURIComponent((a.getAttribute("src") || "").split("/").pop() || "");
+  const KEEP = 9;
+  let liveTried = null;
+  async function live() {
+    if (document.body.classList.contains("sa3-busy")) return;
+    let j;
+    try { const r = await fetch("sa3/outdir/newest", { cache: "no-store" }); if (!r.ok) return; j = await r.json(); } catch (e) { return; }
+    if (!j.newest || j.newest === liveTried) return;
+    const main = [...document.querySelectorAll(".sa3-player audio, #sa3-hist audio")];
+    if (main.some((a) => shownName(a) === j.newest)) { liveTried = j.newest; return; }
+    const kept = new Set(main.slice(0, KEEP).map(shownName));
+    if (main.some((a) => !a.paused && (a.dataset.hs || !kept.has(shownName(a))))) return;
+    const ae = document.activeElement;
+    if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && ae.closest("#sa3-out") && ae.value.trim()) return;
+    const btn = document.querySelector("#sa3-outdir-apply");
+    if (!btn) return;
+    liveTried = j.newest;
+    btn.click();
+  }
   refresh();
   setInterval(mount, 700);
+  setInterval(live, 4000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) live(); });
 }

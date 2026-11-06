@@ -1,4 +1,4 @@
-"""Studio add-ons' browser assets (anarchy_ui.*, outdir.*), merged into studio's CSS/JS.
+"""Studio add-ons' browser assets (anarchy_ui.*, outdir.*, extend.*, uiprefs.*), merged into studio's CSS/JS.
 
 Gradio takes one JS function expression, so studio.js's `() => {…}` and each add-on's run
 inside one wrapper, each in its own scope. Each add-on keeps its server side in its .py.

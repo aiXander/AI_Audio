@@ -1,0 +1,6 @@
+/* Arranger button (arranger_link.js), styled like the Filter button next to it */
+#sa3-arrbtn { flex: none; display: inline-flex; align-items: center; gap: 7px; width: auto !important; min-width: 0 !important;
+  height: 30px; padding: 0 12px 0 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.035);
+  color: #c9c9d6; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, color .15s; margin-right: 6px; }
+#sa3-arrbtn svg { width: 14px; height: 14px; }
+#sa3-arrbtn:hover { color: #fff; border-color: rgba(124,156,255,0.5); background: rgba(124,156,255,0.14); }

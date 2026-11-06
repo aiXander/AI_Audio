@@ -128,6 +128,8 @@
     b.addEventListener("click", () => setFocus(!document.body.classList.contains("sa3-focus")));
     brand.prepend(b);
     setFocus(!!localStorage.getItem(FOCUS_KEY));
+    const ap = document.querySelector("#sa3-autoplay label");   // icon-only toggle (studio.css): its name lives in the tooltip
+    if (ap) ap.title = "Autoplay: start each new render as soon as it lands";
   }
   document.addEventListener("keydown", (e) => {
     if (e.key === "\\" && !e.metaKey && !e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
@@ -200,6 +202,7 @@
   }
 
   function tick() {
+    keepPlaying();                                     // first: enhanceHistory must see the rescued <audio>
     let anyBusy = false;
     for (const cls of ["sa3-player", "sa3-timing", "sa3-error", "sa3-queued", "sa3-history"]) {
       const el = document.querySelector("." + cls);
@@ -230,7 +233,8 @@
     loraSync();
     mountSplit();
     mountFocus();
-    keepPlaying();
+    holdAnchor();                                      // last: every row has its final height now
+    newPill();
   }
 
   // ── a finished render never interrupts what you're listening to ──
@@ -265,24 +269,122 @@
   document.addEventListener("timeupdate", (e) => {
     if (listen && e.target === listen.el && !e.target.paused) { listen.t = e.target.currentTime; listen.ts = Date.now(); }
   }, true);
+
+  // ── Space = play/pause the last touched clip, and nothing else ──
+  // Never scrolls the page and never "clicks" a focused button (Space activates a button on
+  // keyup, so keyup is swallowed too). Only text fields keep Space for typing. "Touched" = the
+  // last clip you played, paused or clicked anywhere on (its card, spectrogram, transport);
+  // gradio swaps <audio> elements on re-render, so it's re-found by clip name. Nothing touched
+  // yet → the player's current clip.
+  let touched = null;                                  // clip name
+  const typing = (t) => t && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "SELECT"
+    || (t.tagName === "INPUT" && !/^(checkbox|radio|button|submit|range|file|color|reset)$/i.test(t.type)));
+  const clipAudio = (n) => n && [...document.querySelectorAll("audio")].find((a) => a.isConnected && clipName(a) === n);
+  for (const ev of ["play", "pause"]) document.addEventListener(ev, (e) => { if (isMedia(e.target) && e.target.isConnected) touched = clipName(e.target); }, true);
+  addEventListener("pointerdown", (e) => {
+    const a = e.target.closest?.(".blk")?.querySelector("audio");
+    if (a) touched = clipName(a);
+  }, true);
+  addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.repeat) return;
+    const a = clipAudio(touched) || document.querySelector(".sa3-player audio");
+    if (!a) return;
+    gestureAt = Date.now();                            // a deliberate play: the listen guard lets it through
+    if (a.paused) a.play().catch(() => {}); else a.pause();
+  }, true);
+  addEventListener("keyup", (e) => {
+    if (e.code === "Space" && !typing(e.target)) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  // Seamless: gradio's re-render detaches the <audio> you're on and inserts a fresh copy.
+  // Chrome only pauses a removed media element on a later task, so putting the *same*
+  // element back in place of the copy (from the MutationObserver microtask, before that
+  // task runs) keeps it playing with no gap, no reload and no lost position. Matched by
+  // clip name, so it also follows the clip from the player slot into the history list.
+  // Called from the observer callback and again at the start of tick() (a row rebuilt
+  // by our own code later in the frame); if Chrome did pause it, it's resumed.
   function keepPlaying() {
-    if (!listen || !listen.on || listen.el.isConnected) return;
-    const ghost = listen.el;                           // swapped out; Chrome may keep it playing detached
-    const next = [...document.querySelectorAll("audio")].find((x) => x !== ghost && srcOf(x) === listen.src);
+    if (!listen || listen.el.isConnected || listen.el.dataset.hs) return;
+    const ghost = listen.el, name = clipName(ghost);
+    const next = [...document.querySelectorAll("#sa3-out audio, #sa3-lib audio")]
+      .find((x) => x !== ghost && !x.dataset.hs && clipName(x) === name);
     if (!next) return;                                 // not back in the DOM (yet): retried on the next mutation
-    listen.el = next;
-    const go = () => {
-      const t = ghost.paused ? listen.t + (Date.now() - listen.ts) / 1000 : ghost.currentTime;
-      try { next.currentTime = isFinite(next.duration) ? Math.min(t, next.duration - 0.05) : t; } catch (e) { /* not seekable yet */ }
-      next.addEventListener("playing", () => ghost.pause(), { once: true });
-      next.play().catch(() => { ghost.pause(); });
-    };
-    if (next.readyState >= 1) go();
-    else {
-      next.addEventListener("loadedmetadata", go, { once: true });
-      if (next.preload === "none") { next.preload = "metadata"; next.load(); }
-    }
+    delete ghost.dataset.sa3;                          // let enhanceHistory give the new row its transport bar
+    ghost.removeAttribute("autoplay");
+    next.replaceWith(ghost);
+    if (listen.on && ghost.paused) ghost.play().catch(() => {});
   }
+
+  // ── new renders never move the list you're looking at ──
+  // Remember the first visible row of the output column (#sa3-out, the scroll box) and its
+  // offset; after a re-render inserts rows above it, scroll by the difference so it stays
+  // put (runs in tick(), i.e. before the frame paints). Native CSS scroll anchoring can't
+  // do this: gradio replaces every row node, so its anchor node is gone. Rows that arrive
+  // above the viewport are announced by a "↑ new" pill (unplayed rows, see sa3-new).
+  // The anchor is the clip you last touched (played / scored / clicked) while it's on screen,
+  // else the first visible row. studio.css sets overflow-anchor:none on #sa3-out so Chrome's
+  // own anchoring can't add a second correction on top of this one.
+  // If the anchor row is briefly missing (gradio mid-swap, or the column momentarily shorter
+  // so the browser clamps scrollTop), the old anchor is kept for ANCHOR_GRACE ms instead of
+  // re-recording from that in-between layout, which is what used to push the list down.
+  const ANCHOR_GRACE = 1500;
+  let anchor = null;                                   // { name, off, miss? }
+  const outEl = () => document.getElementById("sa3-out");
+  const rowName = (b) => { const a = b.querySelector("audio"); return a ? clipName(a) : null; };
+  const anchorHeld = () => anchor && anchor.miss && Date.now() - anchor.miss < ANCHOR_GRACE;
+  function recordAnchor() {
+    const out = outEl();
+    if (!out) return;
+    const box = out.getBoundingClientRect(), top = box.top;
+    anchor = null;
+    let first = null;
+    for (const b of out.querySelectorAll(".blk")) {
+      const r = b.getBoundingClientRect();
+      if (!r.height || r.bottom <= top + 1) continue;
+      if (r.top >= box.bottom) break;
+      const name = rowName(b);
+      if (!name) continue;
+      if (!first) first = { name, off: r.top - top };
+      if (name === touched) { anchor = { name, off: r.top - top }; return; }
+    }
+    anchor = first;
+  }
+  function holdAnchor() {
+    const out = outEl();
+    // page-load restore fills the player slot above the history: not "new rows arriving".
+    // Hold only once you've touched the page (any click/key, or scrolling the column).
+    if (!out || !anchor || (!gestureAt && !out.scrollTop)) return recordAnchor();
+    const b = [...out.querySelectorAll(".blk")].find((x) => x.getBoundingClientRect().height && rowName(x) === anchor.name);
+    if (!b) {
+      if (!anchor.miss) anchor.miss = Date.now();
+      if (anchorHeld()) return;                        // keep it: the row is probably about to come back
+      return recordAnchor();
+    }
+    const d = b.getBoundingClientRect().top - out.getBoundingClientRect().top - anchor.off;
+    if (Math.abs(d) > 0.5) out.scrollTop += d;
+    recordAnchor();
+  }
+  let pill = null;
+  function newPill() {
+    const out = outEl();
+    if (!out) return;
+    if (!pill) {
+      pill = document.createElement("div");
+      pill.id = "sa3-newpill";
+      pill.innerHTML = '<button type="button"></button>';
+      pill.firstChild.addEventListener("click", () => outEl()?.scrollTo({ top: 0, behavior: "smooth" }));
+    }
+    const bar = document.getElementById("sa3-actions");   // tiny chip in the top bar, left of Generate
+    if (bar && pill.parentElement !== bar) bar.prepend(pill);
+    const top = out.getBoundingClientRect().top;
+    const n = [...out.querySelectorAll(".blk.sa3-new")].filter((b) => { const r = b.getBoundingClientRect(); return r.height && r.bottom <= top + 8; }).length;
+    pill.classList.toggle("on", n > 0);
+    if (n) pill.firstChild.textContent = `↑ ${n} new`;
+  }
+  document.addEventListener("scroll", (e) => {
+    if (e.target && e.target.id === "sa3-out") { if (!anchorHeld()) recordAnchor(); newPill(); }   // a clamp scroll mid-swap must not move the anchor
+  }, { capture: true, passive: true });
   // ── history rows: tiny transport bar above a full-width spectrogram ──
   const fmt = (t) => !isFinite(t) ? "0:00" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
   const ICON_PLAY = '<svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
@@ -294,6 +396,7 @@
   const ICON_OK = '<svg viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const ICON_RESTORE = '<svg viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.5 2.2v3h3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/></svg>';
   const ICON_FILTER = '<svg viewBox="0 0 16 16"><path d="M2 4h12M4.5 8h7M7 12h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  const ICON_STAR = '<svg viewBox="0 0 16 16"><path d="M8 1.9l1.85 3.85 4.2.55-3.07 2.92.78 4.17L8 11.37l-3.76 2.02.78-4.17L1.95 6.3l4.2-.55z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
   const ICON_TRASH = '<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.3a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.3M6.8 7v4.2M9.2 7v4.2" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const copyBtn = (attrs) => `<button class="sa3-cp" ${attrs} title="Copy prompt">${ICON_COPY}</button>`;
 
@@ -508,7 +611,46 @@
     const txt = b.tier === "nobeat" ? "no beat" : `${Math.round(b.bpm)} BPM${fold ? (b.fold === 2 ? " ½×" : " 2×") : ""}`;
     return `<span class="tag bpm ${b.tier}" title="${esc(tip)}">♩ ${txt}</span>`;
   }
+  // "new" clips: a clip counts as played once it has played ≥2 s (so an Autoplay that
+  // you cancel straight away doesn't count); stamped in the sidecar as label.played
+  document.addEventListener("timeupdate", (e) => {
+    const a = e.target;
+    if (!isMedia(a) || a.paused || a.currentTime < 2 || a.dataset.sa3Played) return;
+    a.dataset.sa3Played = "1";
+    const name = clipName(a), d = labels.get(name);
+    if (d && d.played === false) saveLabel(name, { played: true });
+  }, true);
+  // Smooth playhead: every `.ph` line is otherwise moved by timeupdate (upstream's inline
+  // handler + the Library/More listeners), which Chrome fires only ~4×/s, so the line
+  // stepped and trailed the sound by 0–250 ms. While anything plays, move it every frame
+  // from currentTime instead; the timeupdate handlers stay for seeks while paused.
+  {
+    let raf = 0;
+    const live = new Set();
+    const frame = () => {
+      raf = 0;
+      live.forEach((a) => {
+        if (a.paused || !a.isConnected) { live.delete(a); return; }
+        const ph = a.duration && a.closest(".blk")?.querySelector(".ph");
+        if (ph) ph.style.left = (100 * a.currentTime / a.duration) + "%";
+      });
+      if (live.size) raf = requestAnimationFrame(frame);
+    };
+    document.addEventListener("playing", (e) => {
+      if (e.target.tagName !== "AUDIO") return;
+      live.add(e.target);
+      if (!raf) raf = requestAnimationFrame(frame);
+    }, true);
+  }
+  // a clip you score / tag / star / play on the main page stays there until the filters change,
+  // even if its verdict was never cached (a render that arrived this session, not yet in libRows)
+  function pinShown(name) {
+    if (mainVis.has(name)) return;
+    const onMain = [...document.querySelectorAll("#sa3-out .blk")].some((b) => b.getBoundingClientRect().height && rowName(b) === name);
+    if (onMain) mainVis.set(name, true);
+  }
   async function saveLabel(name, patch) {
+    pinShown(name);
     const cur = labels.get(name) || { score: null, tags: [] };
     labels.set(name, { ...cur, ...patch });
     const lr = libByName.get(name);
@@ -520,15 +662,36 @@
       if (r.ok) labels.set(name, { ...labels.get(name), ...(await r.json()) });
     } catch (e) { console.warn("[sa3] label save failed", e); }
   }
+  // star: POST /sa3/star (library.py star_render) flags the clip and symlinks it into outputs/starred/
+  async function starClip(name, on) {
+    pinShown(name);
+    const prev = !!(labels.get(name) || {}).starred;
+    const paint = (v) => {
+      labels.set(name, { ...(labels.get(name) || { score: null, tags: [] }), starred: v });
+      const lr = libByName.get(name); if (lr) lr.starred = v;
+      document.querySelectorAll(".sa3-lab").forEach((el) => { if (el.dataset.name === name) paintLabel(el); });
+    };
+    paint(on);
+    try {
+      const r = await fetch("sa3/star", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, starred: on }) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (libEl && libEl.classList.contains("open")) renderLibrary();
+    } catch (e) { console.warn("[sa3] star failed", e); paint(prev); }
+  }
   function paintLabel(el) {
     const d = labels.get(el.dataset.name);
     if (!d) return;
+    el.closest(".blk")?.classList.toggle("sa3-new", d.played === false && (d.score === null || d.score === undefined));   // never-played tint
+    if (pill) newPill();
     el.querySelectorAll(".sc button").forEach((b) => {
       const v = Number(b.dataset.v);
       b.classList.toggle("on", d.score !== null && d.score !== undefined && v === d.score);
       b.classList.toggle("lit", d.score !== null && d.score !== undefined && v <= d.score);
     });
     el.classList.toggle("scored", d.score !== null && d.score !== undefined);
+    const st = el.querySelector(".star");
+    st.classList.toggle("on", !!d.starred);
+    st.title = d.starred ? "Starred (linked in outputs/starred/): click to unstar" : "Star: keep it for later in outputs/starred/, whatever its score";
     const tg = el.querySelector(".tags");
     tg.innerHTML = loraChip(d.loras) + bpmChip(d.bpm) + (d.tags || []).map((t, i) =>
       `<span class="tag">${esc(t)}<button data-i="${i}" title="Remove tag">×</button></span>`).join("");
@@ -547,7 +710,8 @@
       el = document.createElement("div");
       el.className = "sa3-lab";
       el.dataset.name = name;
-      el.innerHTML = `<div class="sc" title="Score 0-10 (click the lit one again to clear)">${
+      el.innerHTML = `<button class="star" title="Star: keep it for later in outputs/starred/, whatever its score">${ICON_STAR}</button>
+        <div class="sc" title="Score 0-10 (click the lit one again to clear)">${
         [...Array(11).keys()].map((v) => `<button data-v="${v}">${v}</button>`).join("")}</div>
         <div class="tags"></div>
         <input class="add" placeholder="+ tag" maxlength="60" spellcheck="false">
@@ -562,6 +726,7 @@
         if (sb) { const v = Number(sb.dataset.v); saveLabel(name, { score: d.score === v ? null : v }); return; }
         if (e.target.closest(".rs")) { window.sa3Restore(name); if (libEl && libEl.contains(el)) toggleLibrary(false); return; }
         if (e.target.closest(".rm")) { deleteClip(name); return; }
+        if (e.target.closest(".star")) { starClip(name, !d.starred); return; }
         const tb = e.target.closest(".tag button");
         if (tb) { const t = [...(d.tags || [])]; t.splice(Number(tb.dataset.i), 1); saveLabel(name, { tags: t }); }
       });
@@ -607,6 +772,7 @@
       l.strength !== 1 ? ` ×${num(l.strength)}` : ""}${l.steps ? ` @ ${l.steps[0]}–${l.steps[1]}` : ""}</i></span>`).join("") || null);
     add("A→A input", d.a2a_audio ? esc(base(d.a2a_audio)) : null);
     add("Inpaint", d.inpaint_audio || d.inpaint_range_sec ? esc([base(d.inpaint_audio),
+      d.segments?.inpaint ? d.segments.inpaint.map((s) => `${num(s[0])}–${num(s[1])}`).join(", ") + " s" :
       d.inpaint_range_sec ? `${num(d.inpaint_range_sec[0])}–${num(d.inpaint_range_sec[1])} s` : ""].filter(Boolean).join(" · ")) : null);
     if (window.sa3SettingsExtra) rows.push(...window.sa3SettingsExtra(d, esc, num));   // add-ons (anarchy_ui.js)
     return `<div class="pr">${esc(d.prompt || "(no prompt)")}</div><dl>${rows.join("")}</dl>
@@ -726,7 +892,7 @@
   // spectrogram, caption, score + tags + settings strip). Filters persist in
   // localStorage and, unless "main" is off, also hide main-page history rows.
   const LIB_KEY = "sa3-lib-filters";
-  const LIB_DEF = { q: "", bmin: "", bmax: "", tiers: [], smin: 0, smax: 10, unscored: true, tags: [], dits: [], sort: "new", main: true };
+  const LIB_DEF = { q: "", bmin: "", bmax: "", tiers: [], smin: 0, smax: 10, unscored: true, starred: false, tags: [], dits: [], sort: "new", main: true };
   const TIERS = [["green", "on tempo"], ["yellow", "close"], ["orange", "off"], ["none", "no BPM asked"], ["nobeat", "no beat"]];
   let LF = { ...LIB_DEF };
   try { LF = { ...LIB_DEF, ...JSON.parse(localStorage.getItem(LIB_KEY) || "{}") }; } catch (e) { /* keep defaults */ }
@@ -758,6 +924,15 @@
 
   // main page: hide history rows the active filters exclude. A row's verdict is
   // cached until the filters change, so scoring a clip never yanks it away mid-edit.
+  // Shared by the session list (#sa3-hist) and the older rows below it (#sa3-more): both
+  // get re-filtered whenever a new render lands, so both must read the cached verdict.
+  // A verdict made while the tempo is still being measured isn't cached (it'd stick).
+  function mainShown(r) {
+    if (mainVis.has(r.name)) return mainVis.get(r.name);
+    const v = libFilter(r);
+    if (!(r.bpm && r.bpm.pending)) mainVis.set(r.name, v);
+    return v;
+  }
   function applyMainFilter() {
     const hist = document.getElementById("sa3-hist");
     if (!hist) return;
@@ -771,7 +946,7 @@
       if (on) {
         const r = libByName.get(name);
         if (!r) missing = true;
-        else { if (!mainVis.has(name)) mainVis.set(name, libFilter(r)); vis = mainVis.get(name); }
+        else vis = mainShown(r);
       }
       b.classList.toggle("sa3-filtered", !vis);
       if (!vis) hidden++;
@@ -819,7 +994,8 @@
                 <input type="range" class="smin" min="0" max="10" step="1" aria-label="Minimum score">
                 <input type="range" class="smax" min="0" max="10" step="1" aria-label="Maximum score"></div>
               <div class="dticks">${[...Array(11).keys()].map((v) => `<span>${v}</span>`).join("")}</div>
-              <label class="ck"><input type="checkbox" class="unscored"> include unscored</label></div>
+              <label class="ck"><input type="checkbox" class="unscored"> include unscored</label>
+              <label class="ck"><input type="checkbox" class="starf"> ★ starred only</label></div>
             <div class="f"><span class="h">Tags <em>all must match</em></span><div class="chips tagc"></div></div>
             <div class="f"><span class="h">Model</span><div class="chips ditc"></div></div>
             <button class="reset">Reset filters</button>
@@ -841,6 +1017,7 @@
     lo.addEventListener("input", () => { if (+lo.value > +hi.value) lo.value = hi.value; paintScore(); set({ smin: +lo.value }); });
     hi.addEventListener("input", () => { if (+hi.value < +lo.value) hi.value = lo.value; paintScore(); set({ smax: +hi.value }); });
     $(".unscored").addEventListener("change", (e) => set({ unscored: e.target.checked }));
+    $(".starf").addEventListener("change", (e) => set({ starred: e.target.checked }));
     $(".mainf").addEventListener("change", (e) => set({ main: e.target.checked }));
     $(".sort").addEventListener("change", (e) => set({ sort: e.target.value }));
     $(".reset").addEventListener("click", () => { set({ ...LIB_DEF, sort: LF.sort, main: LF.main }); syncLibInputs(); });
@@ -876,7 +1053,7 @@
   function syncLibInputs() {
     const $ = (s) => libEl.querySelector(s);
     $(".q").value = LF.q; $(".bmin").value = LF.bmin; $(".bmax").value = LF.bmax;
-    $(".smin").value = LF.smin; $(".smax").value = LF.smax; $(".unscored").checked = LF.unscored; $(".sort").value = LF.sort;
+    $(".smin").value = LF.smin; $(".smax").value = LF.smax; $(".unscored").checked = LF.unscored; $(".starf").checked = LF.starred; $(".sort").value = LF.sort;
     $(".mainf").checked = LF.main;
     paintScore();
   }
@@ -890,7 +1067,7 @@
         libLoaded = true;
         for (const x of libRows) {           // seed the label cache: no per-row GET /sa3/label
           if (labels.has(x.name)) continue;
-          labels.set(x.name, { score: x.score, tags: x.tags || [], bpm: x.bpm, prompt: x.prompt, loras: x.loras || [] });
+          labels.set(x.name, { score: x.score, tags: x.tags || [], starred: x.starred, bpm: x.bpm, prompt: x.prompt, loras: x.loras || [], played: x.played });
           if (x.bpm && x.bpm.pending) pollBpm(x.name, 0);
         }
       }
@@ -898,6 +1075,7 @@
     libFetching = false; libLastFetch = Date.now();
     renderLibrary();
     applyMainFilter();
+    holdAnchor();                               // rows hidden/shown here (class toggles) don't wake tick()
     clearTimeout(libTimer);                     // BPM still being measured: refresh shortly
     if (libEl && libEl.classList.contains("open") && libRows.some((x) => x.bpm && x.bpm.pending)) libTimer = setTimeout(loadLibrary, 2500);
   }
@@ -922,6 +1100,7 @@
     if (LF.bmin !== "" && b.bpm < Number(LF.bmin)) return false;
     if (LF.bmax !== "" && b.bpm > Number(LF.bmax)) return false;
     if (LF.tiers.length && !LF.tiers.includes(b.tier)) return false;
+    if (LF.starred && !r.starred) return false;
     if (r.score === null || r.score === undefined) { if (!LF.unscored) return false; }
     else if (r.score < LF.smin || r.score > LF.smax) return false;
     const tg = new Set((r.tags || []).map((t) => t.toLowerCase()));
@@ -997,13 +1176,13 @@
       document.querySelectorAll(".sa3-player audio, #sa3-hist audio").length, document.querySelector(".sa3-player audio")?.src].join("|");
     if (sig !== moreSig) { moreSig = sig; renderMore(); }
   }
-  function moreRows() {
+  function moreRows(filtered = true) {
     const shown = [...document.querySelectorAll(".sa3-player audio, #sa3-hist audio")].map(clipName);
     const seen = new Set(shown);
     const ts = shown.map((n) => libByName.get(n)?.ts).filter((t) => t !== undefined);
     const floor = ts.length ? Math.min(...ts) : Infinity;   // only renders older than the session list
     let rows = libRows.filter((r) => !seen.has(r.name) && !deleted.has(r.name) && r.ts < floor);
-    if (LF.main && libActive() > 0) rows = rows.filter(libFilter);
+    if (filtered && LF.main && libActive() > 0) rows = rows.filter(mainShown);   // cached: a row you just scored stays put
     return rows.sort((a, b) => b.ts - a.ts);
   }
   function renderMore() {
@@ -1015,7 +1194,19 @@
       return el;
     });
     if (moreEnd && rows.length <= moreN) {
-      const end = document.createElement("div"); end.className = "end"; end.textContent = "That's every render.";
+      // the main-page filter can hide most of the folder: say so, or "end" looks like a paging bug
+      const hidden = moreRows(false).length - rows.length;
+      const end = document.createElement("div"); end.className = "end";
+      end.textContent = hidden > 0 ? `That's every render matching the filter: ${hidden} older hidden. ` : "That's every render.";
+      if (hidden > 0) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = "Clear filter";
+        b.addEventListener("click", () => {
+          LF = { ...LIB_DEF, sort: LF.sort, main: LF.main }; localStorage.setItem(LIB_KEY, JSON.stringify(LF));
+          mainVis.clear(); moreEnd = false; renderLibrary(); paintLibBadge(); applyMainFilter(); mountMore();
+          if (libEl) syncLibInputs();
+        });
+        end.append(b);
+      }
       kids.push(end);
     }
     moreEl.replaceChildren(...kids);           // re-inserted synchronously: a playing row keeps playing
@@ -1063,7 +1254,14 @@
   // The running job can be skipped (stops only it); waiting jobs can be deleted, moved
   // with the arrows or dragged into a new order. Polls once a second while open.
   const QMIME = "application/x-sa3-qjob";
-  let qEl = null, qTimer = null, qData = { running: null, waiting: [] }, qDrag = null, qSig = "";
+  let qEl = null, qTimer = null, qData = { running: null, waiting: [] }, qDrag = null, qSig = "", qServerN = 0;
+  setInterval(async () => {                    // badge counts the server's queue, not just this tab's clicks
+    if (document.hidden || (qEl && qEl.classList.contains("open"))) return;   // open modal polls itself
+    try {
+      const r = await fetch("sa3/queue", { cache: "no-store" });
+      if (r.ok) { const d = await r.json(); qServerN = (d.running ? 1 : 0) + d.waiting.length; paintQueueBadge(); }
+    } catch (e) { /* server restarting */ }
+  }, 3000);
   function mountQueue() {
     const top = document.getElementById("sa3-right") || document.getElementById("sa3-top");
     if (!top || document.getElementById("sa3-qbtn")) return;
@@ -1080,8 +1278,10 @@
     const btn = document.getElementById("sa3-qbtn");
     if (!btn) return;
     const open = qEl && qEl.classList.contains("open");
+    // closed: this tab's own jobs, or the server's whole queue if that's bigger (jobs from
+    // another tab or anarchy/enqueue.py only exist server side; polled below)
     const n = open ? (qData.running ? 1 : 0) + qData.waiting.length
-      : (document.body.classList.contains("sa3-busy") ? 1 : 0) + (prog.waiting || 0);
+      : Math.max((document.body.classList.contains("sa3-busy") ? 1 : 0) + (prog.waiting || 0), qServerN);
     const b = btn.querySelector("b");
     b.textContent = n || ""; b.style.display = n ? "" : "none";
     btn.classList.toggle("live", n > 0);
@@ -1102,7 +1302,7 @@
     let h = c.map((t) => `<span>${esc(String(t))}</span>`).join("");
     for (const l of p.loras || []) h += `<span class="lo" title="LoRA">${esc(l.name)} ×${n(l.strength)}</span>`;
     if (p.a2a) h += `<span class="au" title="Audio → audio guide">a2a ${esc(p.a2a.audio)} @${n(p.a2a.noise)}</span>`;
-    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${n(p.inpaint.from)}–${n(p.inpaint.to)} s</span>`;
+    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${p.inpaint.spans != null ? p.inpaint.spans + (p.inpaint.spans === 1 ? " span" : " spans") : `${n(p.inpaint.from)}–${n(p.inpaint.to)} s`}</span>`;
     if (p.neg) h += `<span class="ng" title="Negative prompt">neg: ${esc(p.neg)}</span>`;
     return h;
   }
@@ -1234,14 +1434,19 @@
   // eases toward its target and never moves backwards (a later finish just makes it stall).
   let progTimer = null, progEl = null, progRaf = null;
   const prog = { run: null, rev: -1, t0: 0, end: 0, shown: 0, label: "", txt: "", waiting: 0 };
-  function showQueued(n) {          // "+N queued" on Generate and in the progress line
-    const g = document.getElementById("sa3-generate");
-    if (g) { if (n > 0) g.dataset.q = n; else delete g.dataset.q; }
+  function showQueued(n) {          // jobs waiting behind the running one: the Queue badge shows them
     prog.waiting = n;
     paintQueueBadge();
   }
+  // the progress line lives inside Generate (its ::after hint, studio.css), not beside it:
+  // text floating left of the button collided with the title on narrower windows
+  function setProgText(t) {
+    prog.txt = t;
+    const g = document.getElementById("sa3-generate");
+    if (g) { if (t) g.dataset.prog = t; else delete g.dataset.prog; }
+  }
   function progressFrame() {
-    const fill = progEl.querySelector("i"), txt = progEl.querySelector(".txt");
+    const fill = progEl.querySelector("i");
     if (!progEl.classList.contains("wait") && prog.rev >= 0) {
       const now = performance.now(), span = Math.max(1, prog.end - prog.t0);
       const over = now > prog.end;
@@ -1250,9 +1455,9 @@
       fill.style.width = (prog.shown * 100).toFixed(2) + "%";
       const ls = Math.ceil((prog.end - now) / 1000);
       const left = over || ls < 1 ? "almost done"
-        : `~${ls >= 60 ? Math.floor(ls / 60) + "m " + String(ls % 60).padStart(2, "0") : ls} s left`;
-      const t = `${prog.label} · ${left}${prog.waiting ? ` · +${prog.waiting} queued` : ""}`;
-      if (t !== prog.txt) { txt.textContent = t; prog.txt = t; }
+        : `${ls >= 60 ? Math.floor(ls / 60) + "m " + String(ls % 60).padStart(2, "0") : ls}s left`;
+      const t = `${prog.label} · ${left}`;
+      if (t !== prog.txt) setProgText(t);
     }
     progRaf = requestAnimationFrame(progressFrame);
   }
@@ -1261,7 +1466,7 @@
     if (bar && !progEl) {
       progEl = document.createElement("div");
       progEl.id = "sa3-progress";
-      progEl.innerHTML = '<div class="track"><i></i></div><span class="txt"></span>';
+      progEl.innerHTML = '<div class="track"><i></i></div>';
     }
     if (bar && progEl && progEl.parentElement !== bar) bar.appendChild(progEl);
     if (busy && !progTimer && progEl) {
@@ -1281,12 +1486,12 @@
               prog.t0 = now - d.elapsed_s * 1000;
               prog.end = now + d.left_s * 1000;
             }
-            prog.label = d.phase === "sampling" ? `sampling ${Math.min(d.step + 1, d.steps)}/${d.steps}`
+            prog.label = d.phase === "sampling" ? `step ${Math.min(d.step + 1, d.steps)}/${d.steps}`
               : d.phase === "decode" ? "decoding" : "encoding prompt";
           } else if (prog.rev < 0) {
             progEl.classList.add("wait");
             progEl.querySelector("i").style.width = "0%";
-            progEl.querySelector(".txt").textContent = prog.txt = "waiting for the model…";
+            setProgText("waiting for the model…");
           }
         } catch (e) { /* server busy: keep last */ }
       };
@@ -1299,6 +1504,7 @@
       clearInterval(progTimer); progTimer = null;
       cancelAnimationFrame(progRaf); progRaf = null;
       showQueued(0);
+      setProgText("");
       if (progEl) {
         progEl.querySelector("i").style.width = "100%";
         setTimeout(() => { if (!progTimer) progEl.classList.remove("on"); }, 600);
@@ -1399,9 +1605,9 @@
       }));
     };
     // GPU budget: every repaint re-blurs all the backdrop-filter panels above
-    // this canvas, so the loop runs ~30 fps only while a clip plays, ~10 fps
-    // idle (painting several columns per frame so the crawl keeps its speed),
-    // and stops whenever the window loses focus (rAF alone only stops for a
+    // this canvas, so the loop is capped at ~30 fps (playing or idle; a late
+    // frame paints several columns so the crawl keeps its speed), and stops
+    // whenever the window loses focus (rAF alone only stops for a
     // hidden tab, not a visible-but-unfocused window); focus restarts it.
     const live = new Set();                     // media elements currently playing
     for (const ev of ["play", "pause", "ended", "emptied"]) document.addEventListener(ev, (e) => {
@@ -1424,10 +1630,11 @@
         if (!document.hasFocus()) { running = false; return; }   // frozen until the window gets focus again
         requestAnimationFrame(frame);
       }
+      if (document.body.classList.contains("sa3-nobg")) return;   // Background: Off (uiprefs.js)
       let playing = false;
       if (an) for (const a of live) if (!a.paused && tapped.has(a)) { playing = true; break; }
       const dt = now - last;
-      if (!still && dt < (playing ? 33 : 100)) return;
+      if (!still && dt < 33) return;
       last = now;
       const t = now / 1000;
       let lo = 0, mid = 0, hi = 0;
@@ -1449,7 +1656,7 @@
       // 2. glitch: on kicks while playing, at random moments when idle
       const hit = playing ? env.lo - lastLo > 0.06 && env.lo > 0.35 : t > nextIdle;
       lastLo = env.lo;
-      if (hit && glitch <= 0) { glitch = playing ? 3 + (Math.random() * 5 | 0) : 1 + (Math.random() * 2 | 0); tear(); if (!playing) nextIdle = t + 2.5 + Math.random() * 6; }   // glitch counts frames: idle runs at 1/3 the rate
+      if (hit && glitch <= 0) { glitch = playing ? 3 + (Math.random() * 5 | 0) : 3 + (Math.random() * 6 | 0); tear(); if (!playing) nextIdle = t + 2.5 + Math.random() * 6; }   // glitch counts frames (~30 fps)
       if (glitch > 0) {
         glitch--;
         if (Math.random() < 0.4) tear();
@@ -1488,6 +1695,7 @@
 
   let queued = false;
   new MutationObserver(() => {
+    keepPlaying();                                     // synchronous: before Chrome pauses the detached clip
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; tick(); });

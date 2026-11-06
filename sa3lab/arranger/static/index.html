@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA3 Arranger</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">Arranger</div>
+  <input id="name" class="name" spellcheck="false" title="Template name (its folder under outputs/arranger/)">
+  <label>BPM <input id="bpm" type="number" min="60" max="200" step="1"></label>
+  <label>Key <select id="key"></select></label>
+  <select id="scale" title="Scale / mode"></select>
+  <label title="Delays every off-16th by this fraction of a step">Swing <input id="swing" type="range" min="0" max="0.5" step="0.01"></label>
+  <label title="Seeded timing (±18 ms·h) and velocity (±25%·h) jitter on every clip without its own value">Humanize <input id="humanize" type="range" min="0" max="1" step="0.05"></label>
+  <label title="Song seed: the default seed of every lane's clips">Seed <input id="seed" type="number" step="1"></label>
+  <button id="seed-dice" class="icon" title="New song seed">🎲</button>
+  <span id="len" class="len"></span>
+  <span class="grow"></span>
+  <div class="menu">
+    <button id="open-btn">Open ▾</button>
+    <div id="open-menu" class="pop"></div>
+  </div>
+  <button id="undo" class="icon" title="Undo (⌘Z)">↶</button>
+  <button id="redo" class="icon" title="Redo (⇧⌘Z)">↷</button>
+</header>
+
+<div id="transport">
+  <button id="play" class="primary" title="Play / pause (space)">▶</button>
+  <span id="time" class="mono">0:00.0</span>
+  <button id="render" title="Render the WAV now (R)">Render</button>
+  <label title="Re-render after every edit (old renders are pruned to the newest 8 per template)"><input id="auto" type="checkbox" checked> auto</label>
+  <label title="Also write one WAV per lane next to the render"><input id="stems" type="checkbox"> stems</label>
+  <span id="status" class="status"></span>
+  <span class="grow"></span>
+  <span class="chords">
+    Chords <input id="degrees" class="mono" title="Scale degrees, one chord each (1 = tonic). e.g. 1 6 3 7" spellcheck="false">
+    <span id="chordnames" class="chordnames"></span>
+    <label title="Bars each chord lasts">bars <input id="chordbars" type="number" min="1" max="8" step="1"></label>
+    <label><input id="sevenths" type="checkbox"> 7ths</label>
+    <button id="prog-dice" class="icon" title="New progression (seeded)">🎲</button>
+  </span>
+</div>
+
+<main>
+  <div id="tlwrap"><canvas id="tl"></canvas></div>
+  <aside id="insp"></aside>
+</main>
+
+<footer id="send">
+  <div class="col grow">
+    <div class="row">
+      <span class="h">Send to SA3</span>
+      <span id="studio-dot" class="dot" title="Studio status"></span><span id="studio-txt" class="muted"></span>
+      <span class="grow"></span>
+      <button id="hints" title="Append the section hints to the prompt">+ section hints</button>
+    </div>
+    <textarea id="prompt" rows="2" spellcheck="false" placeholder="Global prompt for SA3 (editable again in the studio)"></textarea>
+  </div>
+  <div class="col">
+    <label title="Audio-to-audio init noise: lower keeps more of this sketch, higher lets the prompt take over. Unmeasured: try 0.7–0.85">σ init noise <input id="sigma" type="range" min="0.3" max="1" step="0.01"> <b id="sigma-v" class="mono"></b></label>
+    <label title="Blank = whatever seed the studio has. A σ ladder always uses one fixed seed (random if blank)">Seed <input id="send-seed" type="number" placeholder="studio's"></label>
+    <div class="row">
+      <button id="send-load" title="Render, then load it into the studio's a2a input with Length, σ and the prompt set; you press Generate there">Load in studio</button>
+      <button id="send-gen" class="primary" title="Load it and press Generate">Send + Generate</button>
+    </div>
+    <div class="row">
+      <input id="ladder" class="mono" title="σ values for the ladder" spellcheck="false">
+      <button id="send-ladder" title="Same seed, one render per σ: find where the structure survives and the prompt sets the timbre">Send σ ladder</button>
+    </div>
+  </div>
+</footer>
+<audio id="audio" preload="auto"></audio>
+<script src="app.js"></script>
+</body>
+</html>

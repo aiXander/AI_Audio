@@ -23,6 +23,9 @@
 #sa3-dirpop .od-row:hover { background: rgba(155,140,255,0.08); }
 #sa3-dirpop .od-row.on { border-color: rgba(155,140,255,0.45); background: rgba(155,140,255,0.12); color: #ece8ff; }
 #sa3-dirpop .od-n { color: #6f6f82; }
+#sa3-dirpop .od-end { display: flex; align-items: center; gap: 4px; flex: none; }
+#sa3-dirpop .od-cp { margin: 0; opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+#sa3-dirpop .od-row:hover .od-cp, #sa3-dirpop .od-cp.ok { opacity: 1; }
 #sa3-dirpop .od-new { display: flex; gap: 6px; margin-top: 8px; }
 #sa3-dirpop .od-new input { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.09); border-radius: 8px;
   color: #e6e4f2; padding: 6px 8px; font: 500 12px "JetBrains Mono", ui-monospace, monospace; }

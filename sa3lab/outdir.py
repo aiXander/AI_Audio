@@ -17,9 +17,11 @@ points `sa3_gradio.OUTPUT_DIR` there for that job. Switching folders therefore n
 renders that are already queued.
 
 The active folder survives restarts (`outputs/.sa3_outdir.json`). Folders are sandboxed to
-`outputs/`; `deleted/`, `inputs/`, `cond/` and hidden folders are not offered.
+`outputs/`; `deleted/`, `inputs/`, `cond/` and hidden folders are not offered. A folder is listed if it
+holds renders, is active, or is an empty leaf (a new session folder made outside the UI shows up
+before its first render; `_`-prefixed tool folders don't).
 
-    GET  /sa3/outdir                 → {"active": rel, "folders": [{"rel", "n"}]}
+    GET  /sa3/outdir                 → {"active": rel, "folders": [{"rel", "n"}], "root": abs outputs/}
     POST /sa3/outdir {"path": rel}   switch (creates the folder if it doesn't exist)
 """
 from __future__ import annotations
@@ -82,7 +84,12 @@ def folders() -> list[dict]:
         if not d.is_dir() or resolve(str(d)) is None or len(d.relative_to(ROOT).parts) > 3:
             continue
         n = sum(1 for f in d.iterdir() if f.suffix.lower() in AUDIO_EXT)
-        if n or d == active():
+        # an empty folder is offered only as a leaf (a fresh session folder someone made, e.g.
+        # outputs/anarchy/session-2-djrum/), never as a parent like anarchy/ or a tool folder
+        # (_analysis, _specs, _dadagrid)
+        leaf = n == 0 and not any(c.name.startswith("_") for c in d.relative_to(ROOT).parents if c.name) \
+            and not d.name.startswith("_") and not any(resolve(str(c)) for c in d.iterdir() if c.is_dir())
+        if n or d == active() or leaf:
             out.append({"rel": rel(d), "n": n})
     return out
 
@@ -168,7 +175,7 @@ def install_routes() -> None:
     from gradio import routes
 
     def get():
-        return JSONResponse({"active": rel(active()), "folders": folders()})
+        return JSONResponse({"active": rel(active()), "folders": folders(), "root": str(ROOT)})
 
     async def post(request: Request):
         d = await request.json()
@@ -176,12 +183,26 @@ def install_routes() -> None:
         if p is None:
             return JSONResponse({"error": "folder must be inside outputs/"}, status_code=400)
         set_active(p)
-        return JSONResponse({"active": rel(p), "folders": folders()})
+        return JSONResponse({"active": rel(p), "folders": folders(), "root": str(ROOT)})
+
+    def newest():
+        """Newest finished render in the active folder (its sidecar is written), for the page's
+        live view (outdir.js): renders queued from elsewhere (another tab, anarchy/enqueue.py)
+        never reach this page's gradio session, so the page reloads its history when one lands.
+        Gated on the sidecar so the reload never rebuilds a half-written entry from its filename."""
+        d, best = active(), None
+        for f in d.iterdir():
+            if f.suffix.lower() in AUDIO_EXT and f.is_file():
+                m = f.stat().st_mtime
+                if (best is None or m > best[0]) and Path(str(f) + ".json").exists():
+                    best = (m, f.name)
+        return JSONResponse({"active": rel(d), "newest": best[1] if best else None})
 
     orig = routes.App.create_app
 
     def create_app(*a, **kw):
         app = orig(*a, **kw)
+        app.add_api_route("/sa3/outdir/newest", newest, methods=["GET"])
         app.add_api_route("/sa3/outdir", get, methods=["GET"])
         app.add_api_route("/sa3/outdir", post, methods=["POST"])
         ours = [r for r in app.router.routes if getattr(r, "path", "").startswith("/sa3/")]

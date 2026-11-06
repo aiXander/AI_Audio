@@ -1,6 +1,6 @@
 # SA3 promptless anarchy: sampling T5Gemma conditioning instead of writing prompts
 
-**Status: Stages 1–2 done for `grammar-music-100` (corpus, 100 reference renders, first fit); studio Promptless panel + switchable output folder built; no latent clip listened to yet; Stage 2's three numeric sanity renders not done.**
+**Status: Stages 1–2 done for `grammar-music-100` (corpus, 100 reference renders, first fit); studio Promptless panel + switchable output folder built; Stage 2's three numeric sanity renders not done. Session 1 (`outputs/anarchy/session-1/`, free exploration rather than the E00 design below, ~200 clips scored 0–10 by 2026-11-06): mean ≈ 2.5, max 6, no keeper; seed + label noise ≈ 100% of score variance, so single renders say nothing; the only direction that held over 4 seeds is `bag T1.2 d45391 L50` (6/4/4/4); most single-render 4s regress to 1–3 on re-seed. **Every tensor-sampler render carries ~25 ghost tokens** (Stage 2 finding below); stripping them (`g0`) scored lower in 4/4 fixed-seed pairs and moved the tempo, so they are part of the sound, not junk. `n1` (norm match) scored ≥ its pair in 4/4 (mean +1.75). ("`bag` T > 1.15 scores higher" and "less beat scores higher" vanished on first looks: they were the liked `d45391` family re-rendered 15+ times, see `analyze_labels.py`'s design-independent view.) Fixed-seed findings: the noise seed sets the arrangement (tempo, loudness contour); token *direction* carries the semantic character; token *magnitude* (T inflates it ~linearly in tensor-pca: norm 120 at T1, 256 at T2.5) reshapes arrangement/density. Built 2026-11-06: `cross`, `x<n>`, `n1`, `g0`, `r<pct>`, `j<eps>`, `s<scale>`, `@a + @b` breed, `precompute.py` (all in the `sampler.py` docstring). Fixed-conditioning probe (5 conditionings × {s0.5, s2, j0.3, r50} at each one's scored seed, judged by Xander's ear + `sa3lab/dadagrid.py` grids): a new seed keeps the texture and changes the arrangement; direction jitter `j0.3` (cosine 0.96) kept the character on 5/5, so it is the safe *variation* knob around a liked vector; global scale and dropping half the tokens are big moves, harmless on in-distribution vectors (cross k5, tensor-diag T0.79) and destructive on edge ones (tensor-pca T2.5, cocktail k1, bag T1.2). Numbers per round in the research doc Log.**
 The base corpus is synthetic, so nothing waits on the studio's labeled dataset. Order: Stages 1–2 need no listening;
 Stage 3 (`E00-edge`) is the first experiment; Stage 4's lanes are picked by E00's result.
 
@@ -169,6 +169,14 @@ into `(256, 768)`. It encodes one prompt per call (not batched), the way the stu
   `:`, `,`), instruments, genres, timbre words (`drone, granular, tape, glitch`), motion words
   (`fast, interlocking, rolling`), places and sub-word fragments: the vocabulary for
   concept cocktails, once the template clusters are excluded.
+- **Ghost tokens in every tensor sample (found 2026-11-06).** Positions where fewer than
+  `MIN_LENGTH_GROUP` (20) corpus prompts are that long fall back to the pooled content/pad fit,
+  so a `tensor-pca` / `tensor-diag` draw is: L content rows, a run of exact padding, then ~25
+  "ghost" rows (norm 2–45 vs 122 ± 16 for real tokens) at positions ~54–78 of
+  `grammar-music-100`. Keys are qk-normed, so the DiT attends ghosts as much as real words:
+  every tensor render before `g0` is really "L words + ~25 faint blends". Possibly part of why
+  tensor samplers score below `bag` (2.2–2.5 vs 2.9), but `g0` A/B pairs scored *lower* without
+  them (4/4), so the ghosts act as real (weak, generic) conditioning. A bigger corpus shrinks the band.
 - Sampling sanity: pca draws at T 1 land at `distance()` ≈ 1, T 2 at ≈ 2; corpus prompts sit at
   0.55–0.94.
 
@@ -235,6 +243,25 @@ into `(256, 768)`. It encodes one prompt per call (not batched), the way the stu
   from a distribution). They pre-date the `.cond.npz`-beside-audio convention and save
   conditioning in `cond/` instead. Injection verified exact (prompt vs its own injected
   encoding: bit-identical audio).
+- Label analysis: `uv run sa3lab/anarchy/analyze_labels.py outputs/anarchy/<session>` →
+  `<session>/_analysis/` (report.md, rows.csv, plots). Trap it is built around: one
+  conditioning re-rendered with other seeds/lengths spans scores 0–4 (session-1, d0), so read
+  single-seed knob effects only through its noise-floor line and bootstrap CIs.
+- New operators reach the running studio only after `make start` (it imports `sampler.py`
+  once at boot, no auto-restart). `sa3lab/anarchy/precompute.py "<spec>" …` bakes specs into
+  `outputs/anarchy/_specs/<slug>.cond.npz` (with the source `spec` stored beside `cond`) and
+  prints `anarchy: @…` prompts any studio build renders (the spec is stored under `source_spec`:
+  a studio that parsed a stored `spec` rejected knobs newer than itself, and gradio still reported
+  the job as done; `enqueue.py` now ends with a `landed N of M` count); `analyze_labels.py` reads the stored
+  spec back, so those renders analyze as the native sampler. Same code + rngs → the native spec
+  later gives the identical array, so both spellings pool into one repeat group.
+- Queue a sweep into the live studio: `sa3lab/anarchy/enqueue.py jobs.json --outdir <folder>`
+  (posts to `/generate`, ≤ 8 of its jobs waiting at a time, skips jobs already rendered; a job's
+  `"loras"` fills the LoRA slots, and the LoRA set is part of the skip key). The studio returns its
+  errors as an `error: …` status string, which `enqueue.py` now prints as FAIL. Trap: keep batch
+  files out of the render folder itself (use a `_design/` subfolder). Any non-sidecar `.json` in the
+  folder the studio is *viewing* crashed every render (`library.py` render-time estimator, guarded
+  2026-11-06, live after the next `make start`): 37 of 40 session-2 jobs failed that way.
 - Xander's call: the first E00 (48 clips) and random batch 2 (6 clips) were moved to the
   macOS Trash (`~/.Trash/sa3-latent-samples-2026-11-05/`), so no clip has been listened to
   or labeled yet.
@@ -289,9 +316,11 @@ Lanes 4D (time) and 4F (taste loop) are worth running whatever E00 says.
 ## Stage 4 — lanes (one experiment each, usually one ladder or grid)
 
 **4A · Bag operators (SA3-native; no semantic-anarchy equivalent)**
-- *Crossover*: one bag built from token subsets of 2–3 real prompts (genre fusion without
+- *Crossover* — **built as the `cross` sampler** (`k<n>`, optional `w:<world|family>` filter;
+  2026-11-06, first renders in session-1): one bag built from token subsets of 2–3 real prompts (genre fusion without
   writing the hybrid prompt). Control: encode the concatenated text.
-- *Emphasis*: duplicate chosen tokens ×{1, 2, 4, 8} = prompt weighting on the distilled
+- *Emphasis* — whole-bag form **built as the `x<n>` post-op** (content tiled n× into the pad
+  slots, any sampler): duplicate chosen tokens ×{1, 2, 4, 8} = prompt weighting on the distilled
   model; and a padding-count sweep (fewer/more pads) as a conditioning-strength dial. Gated
   on sanity render 3.
 - *Replace-m* — **built as the `mutate` sampler**: a real prompt's bag with m% of its L
@@ -305,7 +334,8 @@ Lanes 4D (time) and 4F (taste loop) are worth running whatever E00 says.
   of those are sub-word fragments; a bigger corpus or a higher `--k` gives a richer
   vocabulary (semantic-anarchy's E10 "sparse axis cocktails").
 
-**4B · Reach corrections**: per-token norm matching (the SA3-specific one, above); radius
+**4B · Reach corrections**: per-token norm matching (the SA3-specific one, above; **built as
+the `n1` post-op**, each content row rescaled to a random real corpus token's norm); radius
 band; length mode corpus vs fixed vs off; `split` four corners (temp-on/off ∈ {0.5, 2}²):
 *does the good weirdness live on the corpus manifold or off it?* (semantic-anarchy E04;
 `docs/reference/sampler-corrections.md` there).
@@ -338,6 +368,9 @@ Medium (above), so a mean that is identical across positions behaves as upstream
 every render → selection fit on keepers or one tag → pca on it = "more of what I liked";
 a labeled-steering vector once labels exist; a "promptless" mode in the studio
 (`sa3lab/studio.py` docstring: how upstream gradio is patched without editing it).
+Taste steering *outside* the text conditioning (label scorer on audio features, SAME-latent and
+activation steering, noise neighbourhoods, keeper LoRA) lives in
+[sa3-sound-level-control.md](sa3-sound-level-control.md); this lane keeps conditioning-space fits only.
 
 Name what earns a name (a region, a recipe: "bag-cocktail sitar×breakcore at T 1.5") in a
 lexicon in the research doc, semantic-anarchy-ledger style.
@@ -381,7 +414,9 @@ lexicon in the research doc, semantic-anarchy-ledger style.
   token; **don't fit the duration token** (it's appended from `seconds`).
 - **LoRAs**: underfit adapters touch only the seconds embedder on the conditioning side
   (`apply_conditioner_lora`), so a text fit stays valid under a LoRA, but the DiT weights
-  change, so a LoRA'd run is a different experiment.
+  change, so a LoRA'd run is a different experiment. Xander hears a LoRA move the result far
+  more than any conditioning knob, so `analyze_labels.py` analyzes each LoRA set as its own
+  dataset (`_analysis/base/`, `_analysis/lora-<names>/`) and never pools them.
 - **Metrics censor the weird.** Triage ranks by metrics; every listening set still gets
   random picks.
 - Never commit corpora caches, fits or audio: every repo here is public.

@@ -82,24 +82,30 @@ button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
   box-shadow: 0 12px 28px -12px rgba(170,120,255,0.45), inset 0 1px 0 rgba(255,255,255,0.2) !important; }
 #sa3-generate:active { transform: translateY(0); filter: brightness(0.76) saturate(0.72); }
 #sa3-generate::after { content: "⌘↵"; margin-left: 10px; font-size: 12px; opacity: .6; font-weight: 500; }
-#sa3-generate[data-q]::after { content: "⌘↵  ·  +" attr(data-q) " queued"; opacity: .85; }
+/* while a render runs the hint becomes the progress line (studio.js setProgText); the waiting
+   count lives on the Queue badge only */
+#sa3-generate[data-prog]::after { content: attr(data-prog); font: 500 11.5px "JetBrains Mono", ui-monospace, monospace; opacity: .8; white-space: nowrap; }
 
 /* sticky top line above the 40/60 columns (built by studio.py _layout): logo | Generate
-   (dead centre, 44px tall, sets the bar height) | auto-play toggle + Library. While a render runs, Stop and
-   the progress text float either side of Generate (absolute, so it never moves) and the
-   progress track runs along the button's bottom edge. */
+   (centred while there's room, 44px tall, sets the bar height) | autoplay icon, Queue, Arranger, Filter.
+   While a render runs, Stop floats right of Generate (absolute, so it never moves), the
+   progress text replaces Generate's ⌘↵ hint and the progress track runs along its bottom edge. */
 #sa3-top { position: sticky; top: 0; z-index: 30; align-items: center !important; flex-wrap: nowrap !important; gap: 16px !important;
   margin: 0 -14px 12px !important; width: calc(100% + 28px) !important; padding: 0 14px !important; border-radius: 0 0 16px 16px;   /* width: the -14px bleed on both sides, so the centre is the page centre */
   background: rgba(9,9,13,0.66) !important; backdrop-filter: blur(16px); border-bottom: 1px solid rgba(255,255,255,0.05); }
-#sa3-top > .sa3-header { flex: 1 1 0 !important; min-width: 0 !important; }
-/* header (left) and #sa3-right (auto-play + Library) take equal flex shares, so Generate sits dead centre */
-#sa3-top > #sa3-right { flex: 1 1 0 !important; min-width: 0 !important; justify-content: flex-end !important; align-items: center !important;
+#sa3-top > .sa3-header { flex: 1 1 0 !important; min-width: 0 !important; overflow: hidden; }
+/* header (left) and #sa3-right take equal flex shares, so Generate sits dead centre while both fit. The right
+   side never shrinks below its buttons (min-width: max-content): when the bar is tight the header gives way
+   (tagline ellipsis) and Generate drifts left, instead of the buttons sliding under Stop */
+#sa3-top > #sa3-right { flex: 1 1 0 !important; min-width: max-content !important; justify-content: flex-end !important; align-items: center !important;
   flex-wrap: nowrap !important; gap: 14px !important; margin: 0 !important; background: none !important; border: none !important;
   padding: 0 0 0 110px !important; }   /* left 110px = Stop's slot (96px + 10px gap, absolute right of Generate): nothing in here may slide under it */
 #sa3-right > .form, #sa3-right > .block { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
   background: none !important; border: none !important; backdrop-filter: none; }
 #sa3-top .sa3h { padding: 0; flex-wrap: nowrap; }
-#sa3-top .sa3h-brand { gap: 11px; white-space: nowrap; }
+#sa3-top .sa3h-brand { gap: 11px; white-space: nowrap; min-width: 0; }
+#sa3-top .sa3h-brand > div:last-child { min-width: 0; }
+#sa3-top .sa3h-name, #sa3-top .sa3h-tag { overflow: hidden; text-overflow: ellipsis; }
 #sa3-top .sa3h-logo { width: 28px; height: 28px; }
 #sa3-top .sa3h-name { font-size: 16px; }
 #sa3-top .sa3h-tag { font-size: 11px; margin-top: 0; }
@@ -110,12 +116,17 @@ button.secondary:hover { border-color: rgba(155,140,255,0.4) !important; }
 #sa3-actions > #sa3-generate { flex: 0 0 320px !important; min-width: 0 !important; }   /* fills #sa3-actions' 44px; the bar has no vertical padding, so it hugs the button, fixed width */
 #sa3-actions > .form, #sa3-actions > .block { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important;
   background: none !important; border: none !important; backdrop-filter: none; }
-#sa3-autoplay label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a3a3b5; white-space: nowrap; cursor: pointer; padding: 0 4px; }
-#sa3-autoplay input { margin: 0 !important; flex: none; }
-/* when the bar gets tight the auto-play label is what gives way (ellipsis), never the buttons */
-#sa3-right > :has(#sa3-autoplay), #sa3-autoplay { flex: 0 1 auto !important; min-width: 0 !important; overflow: hidden; }
-#sa3-autoplay label { min-width: 0; }
-#sa3-autoplay label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Autoplay: an icon toggle (play-in-circle, lit when on) the size of the other top-bar buttons; the
+   checkbox and its text stay in the DOM (gradio drives them) but are visually hidden, the name is the tooltip */
+#sa3-right > :has(#sa3-autoplay), #sa3-autoplay { flex: none !important; min-width: 0 !important; width: auto !important; padding: 0 !important; }
+#sa3-autoplay label { position: relative; display: grid !important; place-items: center; width: 30px; height: 30px; padding: 0 !important; margin: 0 !important;
+  border-radius: 10px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.035); color: #6f6f80; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s; }
+#sa3-autoplay label::before { content: ""; width: 15px; height: 15px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.6' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M6.5 5.2v5.6L11 8z' fill='black'/%3E%3C/svg%3E") center / contain no-repeat; }
+#sa3-autoplay label:has(input:checked) { color: #c4bbff; border-color: rgba(155,140,255,0.4); background: rgba(155,140,255,0.10); }
+#sa3-autoplay label:hover { color: #fff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.14); }
+#sa3-autoplay input, #sa3-autoplay label span { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0; overflow: hidden; pointer-events: none; }
 #sa3-out > * { min-width: 0; }
 /* hide via body:not(): gradio re-emits every rule with a .gradio-container
    prefix, so a plain "#sa3-stop{display:none}" would outrank the busy rule */
@@ -131,10 +142,11 @@ body.sa3-busy #sa3-stop:hover { background: rgba(255,90,110,0.16) !important; bo
 /* ── output column ────────────────────────────────── */
 /* the newest clip's card (.sa3-player) + the history are one list: the sticky column scrolls as a whole */
 #sa3-out { position: sticky; top: 56px; align-self: flex-start; max-height: calc(100vh - 68px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+#sa3-out { overflow-anchor: none; }   /* studio.js holdAnchor() keeps the list still; Chrome's own anchoring would double-correct */
 #sa3-out { flex-wrap: nowrap !important; }   /* with a max-height, a wrapping column would push the history into an off-screen 2nd column */
 #sa3-out > * { flex-shrink: 0; }
 
-/* progress (studio.js polls /sa3/progress): track inside Generate's bottom edge, text to its left */
+/* progress (studio.js polls /sa3/progress): track inside Generate's bottom edge, text in its ⌘↵ hint */
 #sa3-progress { position: absolute; inset: 0; opacity: 0; transition: opacity .3s; pointer-events: none; }
 #sa3-progress.on { opacity: 1 !important; }
 #sa3-progress .track { position: absolute; left: 12px; right: 12px; bottom: 4px; height: 3px; border-radius: 99px; background: rgba(11,11,16,0.28); overflow: hidden; }
@@ -142,8 +154,6 @@ body.sa3-busy #sa3-stop:hover { background: rgba(255,90,110,0.16) !important; bo
   box-shadow: 0 0 8px rgba(255,255,255,0.6); transition: none; }   /* studio.js animates it per frame */
 #sa3-progress.wait .track i { width: 30% !important; animation: sa3-wait 1.4s ease-in-out infinite; }
 @keyframes sa3-wait { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
-#sa3-progress .txt { position: absolute; right: calc(100% + 14px); top: 50%; transform: translateY(-50%);
-  font: 500 11px "JetBrains Mono", ui-monospace, monospace; color: #b9afff; white-space: nowrap; }
 .sa3-sec { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #7d7d8e; margin: 10px 2px 2px; }
 
 .sa3-player.is-empty { min-height: 190px; border: 1px dashed rgba(255,255,255,0.10) !important; border-radius: 16px !important;
@@ -235,6 +245,16 @@ audio::-webkit-media-controls-enclosure { background: #1a1a23; border-radius: 99
   transition: background .12s, border-color .12s; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk + .blk { margin-top: 12px !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:hover { background: rgba(26,26,33,0.9) !important; border-color: rgba(255,255,255,0.13) !important; }
+/* "↑ n new": unplayed renders above the scrolled list; a tiny chip in the top bar, just left of Generate (studio.js newPill) */
+#sa3-newpill { position: absolute; right: 100%; top: 50%; transform: translateY(-50%); margin-right: 10px; z-index: 5; pointer-events: none; }
+#sa3-newpill button { pointer-events: auto; font: 600 10.5px/1 Inter, system-ui, sans-serif; color: #9fe8df; cursor: pointer; white-space: nowrap;
+  background: rgba(79,209,197,0.10); border: 1px solid rgba(79,209,197,0.35); border-radius: 99px; padding: 3px 8px;
+  opacity: 0; visibility: hidden; transition: opacity .18s; }
+#sa3-newpill.on button { opacity: 1; visibility: visible; }
+#sa3-newpill button:hover { background: rgba(79,209,197,0.18); }
+/* never played yet (label.played unset): a faint teal wash so new renders stand out */
+:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk.sa3-new { background: rgba(20,31,34,0.92) !important; border-color: rgba(79,209,197,0.30) !important; }
+:is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk.sa3-new:hover { background: rgba(22,35,38,0.92) !important; border-color: rgba(79,209,197,0.42) !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk:has(.sa3-mini.on) { border-color: rgba(155,140,255,0.5) !important; background: rgba(25,24,37,0.9) !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .sa3-hrow { flex-direction: column !important; align-items: stretch !important; gap: 5px !important; }
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .sa3-hrow > div { flex: none !important; width: 100%; }
@@ -341,6 +361,14 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
   cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
 .sa3-lab .rm svg { width: 13px; height: 13px; }
 .sa3-lab .rm:hover { color: #ff8a9a; border-color: rgba(255,90,110,0.55); background: rgba(255,90,110,0.12); }
+/* star = starred, symlinked into outputs/starred/ (library.py star_render): outline when off, filled gold when on */
+.sa3-lab .star { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0;
+  border-radius: 999px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.03); color: #8b8b9c;
+  cursor: pointer; transition: color .12s, border-color .12s, background .12s; }
+.sa3-lab .star svg { width: 14px; height: 14px; display: block; flex: none; fill: none; }
+.sa3-lab .star:hover { color: #ffd36b; border-color: rgba(255,200,90,0.5); background: rgba(255,200,90,0.1); }
+.sa3-lab .star.on { color: #ffcf5a; border-color: rgba(255,200,90,0.55); background: rgba(255,200,90,0.14); }
+.sa3-lab .star.on svg { fill: currentColor; }
 .blk.sa3-deleted, .sa3-timing.sa3-deleted,
 :is(.sa3-player, #sa3-hist, #sa3-more, #sa3-lib .list) .blk.sa3-deleted { display: none !important; }   /* must outrank the card rule's display:flex !important */
 #sa3-restore-name, #sa3-restore-btn { display: none !important; }
@@ -431,6 +459,7 @@ body.sa3-dragging .block.sa3-drop { outline: 1.5px dashed rgba(155,140,255,0.55)
 #sa3-more { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 #sa3-more:empty { display: none; }
 #sa3-more .end { text-align: center; color: #5f5f70; font-size: 12px; padding: 6px 0 14px; }
+#sa3-more .end button { background: none; border: 0; padding: 0; color: #9b8cff; font: inherit; cursor: pointer; text-decoration: underline; }
 .sa3-fnote { margin-left: 8px; color: #9b8cff; cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; }
 .sa3-fnote:hover { color: #fff; }
 #sa3-lib .empty, #sa3-lib .more { color: #5f5f70; font-size: 13px; text-align: center; padding: 40px 0 10px; }
@@ -544,7 +573,7 @@ body.sa3-resizing, body.sa3-resizing * { cursor: col-resize !important; user-sel
 .sa3-mini { min-height: 24px; align-items: center !important; }
 .sa3-lab { align-items: center !important; }
 .sa3-mini > *, .sa3-lab > *, .sa3-lab .tags > * { align-self: center !important; margin-top: 0 !important; margin-bottom: 0 !important; }
-.sa3-mini .pp, .sa3-mini .dl, .sa3-lab .sc, .sa3-lab .tag, .sa3-lab .add, .sa3-lab .rs, .sa3-lab .rm {
+.sa3-mini .pp, .sa3-mini .dl, .sa3-lab .sc, .sa3-lab .tag, .sa3-lab .add, .sa3-lab .rs, .sa3-lab .rm, .sa3-lab .star {
   box-sizing: border-box !important; height: 24px !important; min-height: 0 !important; line-height: 1 !important; }
 .sa3-mini .pp { width: 24px; } .sa3-mini .dl { width: 24px; } .sa3-lab .rm { width: 26px; }
 .sa3-lab .sc { align-items: center; }

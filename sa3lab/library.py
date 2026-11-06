@@ -13,7 +13,11 @@ persist.py). Together the sidecars ARE the raw dataset — one row per audio fil
                  are left out, never written as null / []
     "label"      {"score": 0-10 | null, "tags": [str], "updated": iso time,
                  "deleted": iso time (only when the clip was trashed in the UI:
-                 score forced to 0, audio + sidecar moved to deleted/)}
+                 score forced to 0, audio + sidecar moved to deleted/),
+                 "played": iso time of the first ≥2 s listen in the UI (unplayed
+                 clips get a teal tint; see PLAYED_SINCE),
+                 "starred": iso time, set by the star button ("keep for later, good or
+                 bad": also symlinked into outputs/starred/, see star_render)}
     "analysis"   measured, not labelled: {"tempo": {bpm, conf, prompt_bpm, tier
                  green|yellow|orange|none|nobeat, fold, err}} (tempo.py), filled
                  in by a background thread the first time the UI asks for a label
@@ -24,11 +28,12 @@ entry fields (prompt, seed, dit, cfg, sigma); their label still works.
 This module also serves the browser side, as plain routes added to gradio's
 FastAPI app (so a score click never waits behind a running render in the queue):
 
-    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm", "prompt", "loras"}  (bpm may be {"pending"};
+    GET  /sa3/label?name=<file>     → {"score", "tags", "bpm", "prompt", "loras", "played"}  (bpm may be {"pending"};
                                        loras: [{name, strength, steps}] of the LoRAs active in that render)
-    POST /sa3/label  {name, score?, tags?}   writes the sidecar's "label" at once
+    POST /sa3/label  {name, score?, tags?, played?}   writes the sidecar's "label" at once
     GET  /sa3/settings?name=<file>  → restore_settings(): every setting that made the render
                                     (the settings button's hover card shows these)
+    POST /sa3/star {name, starred}  star / unstar a render (star_render)
     POST /sa3/delete?name=<file>    trash a render: label score 0 + "deleted", then audio +
                                     sidecar move to OUT_DIR/deleted/ (out of the UI and the
                                     Library, kept on disk as a negative training example)
@@ -73,6 +78,7 @@ def init(up) -> None:
     global OUT_DIR, _up
     _up = up
     OUT_DIR = Path(up.OUTPUT_DIR).resolve()
+    migrate_saved()
     threading.Thread(target=_tempo_worker, name="sa3-tempo", daemon=True).start()
 
 
@@ -87,6 +93,10 @@ def _audio_path(name: str) -> Path | None:
 
 
 def _sidecar(p: Path) -> Path:
+    """The render's sidecar. A starred/ entry is a symlink: resolve it, so label writes
+    (atomic tmp + rename) land in the original's sidecar instead of replacing the link."""
+    if p.is_symlink():
+        p = p.resolve()
     return p.with_name(p.name + ".json")
 
 
@@ -94,6 +104,17 @@ def _lora_brief(d: dict) -> list[dict]:
     """The LoRAs active in a render (name, strength, step window), for the UI's LoRA badge."""
     return [{k: x.get(k) for k in ("name", "strength", "steps")}
             for x in (d.get("gen") or {}).get("loras") or []]
+
+
+# "never played" tint in the studio: label.played is stamped the first time a clip plays
+# for ≥2 s. Renders from before this existed (ts < PLAYED_SINCE) or already scored count
+# as played, so only new renders light up.
+PLAYED_SINCE = 1793916093
+
+
+def _played(d: dict, ts) -> bool:
+    lab = d.get("label") or {}
+    return bool(lab.get("played")) or lab.get("score") is not None or (ts or 0) < PLAYED_SINCE
 
 
 def read_label(name: str) -> dict | None:
@@ -107,6 +128,8 @@ def read_label(name: str) -> dict | None:
     lab = d.get("label") or {}
     return {"score": lab.get("score"), "tags": lab.get("tags") or [],
             "has_gen": "gen" in d, "bpm": _tempo_of(p, d),
+            "played": _played(d, d.get("ts") or p.stat().st_mtime),
+            "starred": bool(lab.get("starred")),
             "prompt": (d.get("gen") or {}).get("prompt", d.get("prompt")),
             "loras": _lora_brief(d)}
 
@@ -193,8 +216,9 @@ def _tempo_worker() -> None:
             tmp.replace(sc)
 
 
-def write_label(name: str, score=..., tags=...) -> dict | None:
-    """Update score and/or tags in the sidecar (read-modify-write, atomic rename)."""
+def write_label(name: str, score=..., tags=..., played=False) -> dict | None:
+    """Update score and/or tags in the sidecar (read-modify-write, atomic rename);
+    played=True stamps label.played (first play only) without touching label.updated."""
     p = _audio_path(name)
     if p is None:
         return None
@@ -215,12 +239,98 @@ def write_label(name: str, score=..., tags=...) -> dict | None:
                     seen.add(t.lower())
                     clean.append(t)
             lab["tags"] = clean
-        lab["updated"] = datetime.now().isoformat(timespec="seconds")
+        if played and not lab.get("played"):
+            lab["played"] = datetime.now().isoformat(timespec="seconds")
+        if score is not ... or tags is not ...:
+            lab["updated"] = datetime.now().isoformat(timespec="seconds")
         d["label"] = lab
         tmp = sc.with_name(sc.name + ".tmp")
         tmp.write_text(json.dumps(d))
         tmp.replace(sc)
-    return {"score": lab.get("score"), "tags": lab.get("tags") or []}
+    return {"score": lab.get("score"), "tags": lab.get("tags") or [], "played": True if played else _played(d, d.get("ts") or p.stat().st_mtime)}
+
+
+STAR_DIR = Path(__file__).resolve().parents[1] / "outputs" / "starred"
+_STAR_EXT = ("", ".json", ".cond.npz")      # audio, sidecar, latent conditioning (anarchy_ui.py)
+
+
+def _unstar_links(real: Path) -> None:
+    """Remove starred/ symlinks that point at this real audio file."""
+    for ext in _STAR_EXT:
+        ln = STAR_DIR / (real.name + ext)
+        if ln.is_symlink() and ln.resolve() == real.with_name(real.name + ext).resolve():
+            ln.unlink()
+
+
+def migrate_saved() -> None:
+    """One-off upgrade, run at startup: the first star button (2026-11-05) stamped
+    label.saved and put hardlinks + sidecar copies in outputs/saved/. Turn each into
+    label.starred + outputs/starred/ symlinks and drop the saved/ twins. Safe to re-run."""
+    old = STAR_DIR.parent / "saved"
+    if not old.is_dir():
+        return
+    for sc in old.glob("*.json"):
+        try:
+            cp = json.loads(sc.read_text())
+            audio = STAR_DIR.parent / cp["saved_from"] / sc.name[:-len(".json")]
+            if not audio.is_file() or audio.stat().st_ino != (old / audio.name).stat().st_ino:
+                continue                      # original gone or not the same file: leave it
+            osc = audio.with_name(audio.name + ".json")
+            d = json.loads(osc.read_text())
+            lab = d.get("label") or {}
+            lab["starred"] = lab.pop("saved", None) or (cp.get("label") or {}).get("saved")
+            d["label"] = lab
+            osc.write_text(json.dumps(d))
+            STAR_DIR.mkdir(parents=True, exist_ok=True)
+            for ext in _STAR_EXT:
+                src, ln = audio.with_name(audio.name + ext), STAR_DIR / (audio.name + ext)
+                if src.exists() and not ln.is_symlink():
+                    ln.symlink_to(os.path.relpath(src, STAR_DIR))
+                (old / (audio.name + ext)).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[sa3] saved/ migration skipped {sc.name}: {e}")
+    try:
+        old.rmdir()
+    except OSError:
+        pass
+
+
+def star_render(name: str, on: bool) -> bool | None:
+    """Star button: "keep this for later", independent of its score. Stamps label.starred
+    in the original's sidecar and symlinks audio + sidecar (+ .cond.npz) into
+    outputs/starred/, so `outputs/starred` is a folder the studio can be started in
+    (folder chip) showing every starred clip from every folder. Being symlinks, scores and
+    tags set in that view write through to the original (_sidecar resolves the link).
+    Unstar clears the flag and removes the links; the original is never touched."""
+    p = _audio_path(name)
+    if p is None:
+        return None
+    real = p.resolve()
+    sc = _sidecar(p)
+    with _lock:
+        try:
+            d = json.loads(sc.read_text())
+        except Exception:
+            d = {"name": real.name}
+        lab = dict(d.get("label") or {})
+        if on:
+            lab["starred"] = lab.get("starred") or datetime.now().isoformat(timespec="seconds")
+        else:
+            lab.pop("starred", None)
+        d["label"] = lab
+        tmp = sc.with_name(sc.name + ".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(sc)
+        if not on:
+            _unstar_links(real)
+        elif real.parent != STAR_DIR.resolve():
+            STAR_DIR.mkdir(parents=True, exist_ok=True)
+            for ext in _STAR_EXT:
+                src, ln = real.with_name(real.name + ext), STAR_DIR / (real.name + ext)
+                if src.exists() and not ln.exists() and not ln.is_symlink():
+                    ln.symlink_to(os.path.relpath(src, STAR_DIR))
+    _rows.pop(p.name, None)
+    return on
 
 
 def delete_render(name: str) -> bool:
@@ -230,15 +340,19 @@ def delete_render(name: str) -> bool:
     if p is None:
         return False
     write_label(name, score=0)
-    dst = OUT_DIR / "deleted"
-    dst.mkdir(exist_ok=True)
     sc = _sidecar(p)
+    p = p.resolve()                           # trashed from starred/: trash the original
+    _unstar_links(p)                          # a trashed clip leaves the starred set
+    dst = p.parent / "deleted"
+    dst.mkdir(exist_ok=True)
     with _lock:
         try:
             d = json.loads(sc.read_text())
         except Exception:
             d = {"name": p.name}
-        d["label"] = {**(d.get("label") or {}), "deleted": datetime.now().isoformat(timespec="seconds")}
+        lab = {**(d.get("label") or {})}
+        lab.pop("starred", None)
+        d["label"] = {**lab, "deleted": datetime.now().isoformat(timespec="seconds")}
         sc.write_text(json.dumps(d))
         stem, i = p.name, 1
         while (dst / stem).exists():          # never overwrite an earlier trashed clip
@@ -250,6 +364,7 @@ def delete_render(name: str) -> bool:
             shutil.move(str(latent), str(dst / (stem + ".cond.npz")))
         shutil.move(str(p), str(dst / stem))
     _rows.pop(p.name, None)
+    _rows.pop(name, None)
     return True
 
 
@@ -394,6 +509,8 @@ def _speed_rows() -> list[dict]:
             d = json.loads(sc.read_text())
         except Exception:
             continue
+        if not isinstance(d, dict):              # e.g. a jobs.json batch file, not a sidecar
+            continue
         g = d.get("gen") or {}
         tm = g.get("timings_ms") or {}
         if tm.get("T_lat"):
@@ -535,8 +652,9 @@ def library_rows() -> list[dict]:
                "dit": g.get("dit", d.get("dit")), "seed": g.get("seed", d.get("seed")),
                "seconds": g.get("seconds"), "steps": g.get("steps"), "cfg": g.get("cfg", d.get("cfg")),
                "mode": g.get("mode", d.get("mode")), "lora": bool(g.get("loras") or d.get("lora")), "loras": _lora_brief(d),
-               "score": lab.get("score"), "tags": lab.get("tags") or [],
+               "score": lab.get("score"), "tags": lab.get("tags") or [], "starred": bool(lab.get("starred")),
                "has_spec": bool(d.get("spec_b64")), "bpm": _tempo_of(p, d)}
+        row["played"] = _played(d, row["ts"])
         if not row["bpm"].get("pending"):
             _rows[p.name] = (mt, row)
         rows.append(row)
@@ -573,6 +691,8 @@ def install_routes() -> None:
             kw["score"] = d["score"]
         if "tags" in d:
             kw["tags"] = d["tags"]
+        if d.get("played"):
+            kw["played"] = True
         r = write_label(d.get("name", ""), **kw)
         return JSONResponse(r if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
@@ -580,6 +700,12 @@ def install_routes() -> None:
     def settings_get(name: str):     # sync: legacy renders probe the clip length with ffprobe
         r = restore_settings(name)
         return JSONResponse(r if r is not None else {"error": "unknown file"},
+                            status_code=200 if r is not None else 404)
+
+    async def star_post(request: Request):     # POST /sa3/star {name, starred}
+        d = await request.json()
+        r = star_render(d.get("name", ""), bool(d.get("starred")))
+        return JSONResponse({"starred": r} if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
     def delete_post(name: str):      # POST /sa3/delete?name=…; sync: disk moves run in the threadpool
@@ -611,6 +737,7 @@ def install_routes() -> None:
         app.add_api_route("/sa3/label", label_get, methods=["GET"])
         app.add_api_route("/sa3/label", label_post, methods=["POST"])
         app.add_api_route("/sa3/delete", delete_post, methods=["POST"])
+        app.add_api_route("/sa3/star", star_post, methods=["POST"])
         app.add_api_route("/sa3/settings", settings_get, methods=["GET"])
         app.add_api_route("/sa3/progress", progress_get, methods=["GET"])
         app.add_api_route("/sa3/library", library_get, methods=["GET"])

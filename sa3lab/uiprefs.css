@@ -1,0 +1,28 @@
+/* Display settings: gear over the focus button + popover (uiprefs.js). Palette from studio.css. */
+#sa3-sidestack { flex: none; display: flex; flex-direction: column; gap: 3px; }
+#sa3-sidestack #sa3-focusbtn, #sa3-uibtn { width: 24px; height: 20px; border-radius: 6px; }
+#sa3-sidestack #sa3-focusbtn svg { width: 13px; height: 13px; }
+#sa3-uibtn { flex: none; display: grid; place-items: center; padding: 0; border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.035); color: #8b8b9c; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+#sa3-uibtn svg { width: 13px; height: 13px; display: block; transition: transform .3s ease; }
+#sa3-uibtn:hover, #sa3-uibtn.on { color: #fff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.14); }
+#sa3-uibtn.on svg { transform: rotate(60deg); }
+
+#sa3-uipop { position: fixed; z-index: 1000; width: 330px; display: none; background: rgba(17,17,23,0.98);
+  border: 1px solid rgba(155,140,255,0.28); border-radius: 12px; padding: 10px 12px; box-shadow: 0 18px 50px rgba(0,0,0,0.55); }
+#sa3-uipop.open { display: block; }
+#sa3-uipop .up-h { font-weight: 600; color: #f0eeff; font-size: 13px; padding: 2px 0 8px; }
+#sa3-uipop .up-h span { font-weight: 400; color: #6f6f82; font-size: 11.5px; margin-left: 6px; }
+#sa3-uipop .up-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0;
+  border-top: 1px solid rgba(255,255,255,0.05); }
+#sa3-uipop label { color: #c9c9d6; font-size: 12.5px; }
+#sa3-uipop .up-seg { display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); }
+#sa3-uipop .up-seg button { border: 0; background: none; color: #8b8b9c; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 6px; cursor: pointer; }
+#sa3-uipop .up-seg button:hover { color: #fff; }
+#sa3-uipop .up-seg button.on { background: rgba(155,140,255,0.22); color: #e4dfff; }
+#sa3-uipop .up-rng { display: flex; align-items: center; gap: 8px; }
+#sa3-uipop .up-rng input { width: 110px; accent-color: #9b8cff; }
+#sa3-uipop .up-rng b { font: 600 11px "JetBrains Mono", ui-monospace, monospace; color: #c4bbff; min-width: 30px; text-align: right; }
+#sa3-uipop .up-foot { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); }
+#sa3-uipop .up-reset { background: transparent; border: 1px dashed rgba(255,255,255,0.14); color: #8b8b9c; border-radius: 8px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+#sa3-uipop .up-reset:hover { color: #fff; border-color: rgba(155,140,255,0.5); }

@@ -56,6 +56,12 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
   4608-frame canvas, so a seed keeps its opening when Length changes),
 - adds an Extend button to every clip (extend.py/.js: restore the clip's settings with
   Length + N s and the clip as inpaint reference, then Generate),
+- turns the Inpaint and Audio → audio inputs into a dadaspec segment editor (segments.py/.js:
+  click-drag spans on the input's spectrogram; inpaint regenerates every span, a2a gives
+  each span its own noise level),
+- links the SA3 Arranger (arranger_link.py/.js: an Arranger button opens the song-sketch
+  mini-DAW on :7861; its "Send to SA3" loads the sketch WAV as an a2a job through the same
+  restore path, and the render's sidecar gets `gen.arranger`),
 - makes the output folder switchable (outdir.py: a folder chip by the Library button picks
   the folder the history + Library show and new renders go to; queued jobs keep theirs),
 - injects a dark theme, CSS, fonts and a small JS layer at `launch()`
@@ -97,6 +103,8 @@ import addons  # noqa: E402  (add-on browser assets merged into CSS/JS)
 import outdir  # noqa: E402  (switchable output folder: view + render destination)
 import noise  # noqa: E402  (length-stable seeds: noise cropped from one fixed canvas)
 import extend  # noqa: E402  (Extend button: re-render a clip longer, the clip kept as inpaint context)
+import arranger_link  # noqa: E402  (Arranger button + "Send to SA3" from sa3lab/arranger/)
+import segments  # noqa: E402  (spans drawn on the inpaint / a2a input's dadaspec → mask / σ map)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
 
@@ -293,12 +301,15 @@ def _install_stop_hooks():
         bound = gen_sig.bind(*a, **kw)
         bound.apply_defaults()
 
+        seg = segments.current()    # this job's drawn spans (handler thread → MLX thread)
+
         def run(*a, **kw):          # executes on the MLX owner thread
             _stop["run"] = epoch
             library.progress_start(bound)
             try:
                 _check_stop()       # a stopped chain's pregen dies before T5
-                return fn(*a, **kw)
+                with segments.active(seg, bound):
+                    return fn(*a, **kw)
             finally:
                 _stop["run"] = None
                 library.progress_end()
@@ -527,7 +538,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
-CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend")
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -596,17 +607,24 @@ def _add_restore_settings(demo):
     dit_bf.fn = on_dit_change
     mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
 
-    n_out = len(dit_bf.outputs) + 13
+    n_out = len(dit_bf.outputs) + 14
 
     def restore(name, cur_dit, cur_sec, cur_steps, prev, mem, vis, *slots):
         sess = name == SESSION
         ext = None if sess else extend.parse(name)     # "Extend" on a clip (extend.py / extend.js)
-        r = _prefs().get("session") if sess else library.restore_settings(ext[0] if ext else name)
+        arr = None if sess or ext else arranger_link.parse(name)   # "Send to SA3" from the arranger
+        note = None
+        if arr:
+            try:
+                r, note = arranger_link.settings(*arr)
+            except ValueError as e:
+                raise gr.Error(f"Arranger: {e}")
+        else:
+            r = _prefs().get("session") if sess else library.restore_settings(ext[0] if ext else name)
         if r is None:
             if sess:                # nothing saved yet: leave the defaults
                 return tuple(gr.update() for _ in range(n_out))
             raise gr.Error(f"No render named {(ext[0] if ext else name)!r}")
-        note = None
         if ext:
             try:
                 r, note = extend.apply(r, *ext, library, up.MAX_SECONDS.get(
@@ -663,6 +681,7 @@ def _add_restore_settings(demo):
               if ext else
               (float(rng[0]) if rng else (0 if full else keep),
                float(rng[1]) if rng else (0 if full else keep))),
+            segments.restore_value(r, own=not (ext or arr)) if full else keep,
         ]
         missing = [k for k, on in (("guide audio", a2a_on and full and not r.get("a2a_audio")),
                                    ("inpaint audio", bool(rng) and not r.get("inpaint_audio"))) if on]
@@ -679,7 +698,8 @@ def _add_restore_settings(demo):
         ev = btn.click(None, js="() => window.__sa3RestoreName || ''", outputs=[name_box], queue=False
                        ).then(restore, inputs=[name_box] + list(dit_bf.inputs),
                               outputs=list(dit_bf.outputs) + [dit_dd, prompt, neg, steps, seed, cfg, apg,
-                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e],
+                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e,
+                                                              segments.BOX],
                               queue=False, show_progress="hidden")
         # extend.js: an Extend click renders once restored (.success: never after a failed restore)
         ev.success(None, js="() => { if (window.sa3AfterRestore) window.sa3AfterRestore(); }")
@@ -696,17 +716,18 @@ def _add_restore_settings(demo):
         ev = demo.load(lambda: SESSION, outputs=[name_box], queue=False
                        ).then(restore, inputs=[name_box] + list(dit_bf.inputs),
                               outputs=list(dit_bf.outputs) + [dit_dd, prompt, neg, steps, seed, cfg, apg,
-                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e],
+                                                              sigma_g, init_noise, a2a, inpaint, inp_s, inp_e,
+                                                              segments.BOX],
                               queue=False, show_progress="hidden")
         if vis_bf is not None:
             ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
         ev.then(None, js=up._JS_FIX_SLIDERS).then(lambda: True, outputs=[armed], queue=False)
 
         ctl = [dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
-               a2a, inpaint, inp_s, inp_e]
+               a2a, inpaint, inp_s, inp_e, segments.BOX]
         lora_vis, lora_slots = dit_bf.inputs[5], list(gen_bf.inputs[17:32])
 
-        def save(is_armed, dit, dec, prm, ng, sec, stp, sd, cf, ap, sg, inn, a2a_v, inp_v, s0, s1, vis, *sl):
+        def save(is_armed, dit, dec, prm, ng, sec, stp, sd, cf, ap, sg, inn, a2a_v, inp_v, s0, s1, segv, vis, *sl):
             if not is_armed:
                 return
             loras = []
@@ -720,7 +741,7 @@ def _add_restore_settings(demo):
                 "seed": sd or "", "seconds": sec, "steps": stp, "cfg": cf, "apg": ap,
                 "sigma_max": sg, "init_noise_level": inn, "a2a_audio": a2a_v or None,
                 "inpaint_audio": inp_v or None,
-                "inpaint_range_sec": [s0, s1], "loras": loras, "full": True})
+                "inpaint_range_sec": [s0, s1], "segments": segv or "", "loras": loras, "full": True})
         gr.on([c.change for c in ctl + [lora_vis] + lora_slots], save,
               inputs=[armed] + ctl + [lora_vis] + lora_slots, queue=False,
               show_progress="hidden", trigger_mode="always_last")
@@ -864,12 +885,15 @@ def main():
     library.init(up)
     noise.install(library)
     extend.install(library)
+    arranger_link.install(library)
+    segments.install(up, library)       # sampler hook, gen.segments, restore passthrough, /sa3/inspec
     outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
     renderq.install_routes()
     anarchy_ui.install(up, persist)
     anarchy_ui.install_routes()
     outdir.install_routes()
+    arranger_link.install_routes()
     _install_stop_hooks()
     up.render_player = _row_player(up.render_player)   # newest clip = first list row
     orig_render_player = up.render_player   # new entries are persisted in _wire_handlers
@@ -880,10 +904,12 @@ def main():
     def launch(self, *a, **kw):
         _add_restore_on_load(self, orig_render_player)
         _wire_handlers(self)
+        segments.add_box(self)                   # before the restore wiring, which reads/writes it
         _add_restore_settings(self)
         _layout(self)
         outdir.install(self, persist, hispec.render_spectrogram_png, orig_render_player,
                        HISTORY_ON_LOAD)          # after _wire_handlers: wraps outside it
+        segments.wire(self)                      # outermost: strips the spans box off the inputs
         kw.update(share=False, server_name="127.0.0.1", theme=theme, css=CSS, js=JS)
         kw["allowed_paths"] = list(kw.get("allowed_paths") or []) + [out_real, str(outdir.ROOT)]
         print("SA3 Studio → http://127.0.0.1:%s" % (kw.get("server_port") or 7860), flush=True)
