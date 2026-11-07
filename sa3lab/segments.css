@@ -141,3 +141,12 @@ html.sa3seg-full, html.sa3seg-full body { overflow: hidden; }
   color: #8b8b9c; background: #1a1a23; border: 1px solid rgba(255,255,255,.1); }
 .sa3seg .sg-help:hover { color: #fff; }
 .sa3seg audio { display: none; }
+
+/* an Audio → audio / Inpaint accordion whose input holds audio (segments.js): teal edge + an "audio loaded"
+   chip on the header, so a reference left in a collapsed panel can't be forgotten (it shapes every render) */
+.gradio-container .block.sa3-has-audio { border-color: rgba(79,209,197,0.55) !important;
+  box-shadow: inset 0 0 0 1px rgba(79,209,197,0.25), inset 0 0 48px rgba(79,209,197,0.07) !important; }
+.block.sa3-has-audio > .label-wrap { color: #bff3ec !important; }
+.block.sa3-has-audio > .label-wrap > span:first-child::after { content: "audio loaded"; margin-left: 10px; padding: 2px 8px; border-radius: 99px;
+  vertical-align: 1px; font: 600 11px "JetBrains Mono", ui-monospace, monospace; color: #9fe8df;
+  background: rgba(79,209,197,0.12); border: 1px solid rgba(79,209,197,0.4); }

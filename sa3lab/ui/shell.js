@@ -1,5 +1,5 @@
 // SA3 UI kit: the app shell (one top bar on every kit page: brand, page tabs, the studio's
-// render progress) and toasts.
+// render progress, which opens the shared Queue modal) and toasts.
 //
 //   const sh = mountShell(document.body, {active: "composer"})   → {bar, right}  (right: page widgets)
 //   toast("text", {error: true, ms: 5000})
@@ -31,8 +31,8 @@ export function mountShell(host, { active } = {}) {
   const bar = document.createElement("header");
   bar.className = "ui-shell" + (embedded ? " embedded" : "");
   bar.innerHTML = embedded
-    ? `<nav class="hostgap"></nav><div class="right"><div class="q" title="the studio's render queue"></div></div>`
-    : `<div class="brand"><i></i>SA3</div><nav></nav><div class="right"><div class="q" title="the studio's render queue"></div></div>`;
+    ? `<nav class="hostgap"></nav><div class="right"><button class="q" title="the studio's render queue (Generate clicks + Composer takes): click to reorder, delete or skip jobs"></button></div>`
+    : `<div class="brand"><i></i>SA3</div><nav></nav><div class="right"><button class="q" title="the studio's render queue (Generate clicks + Composer takes): click to reorder, delete or skip jobs"></button></div>`;
   if (!embedded) {
     const nav = bar.querySelector("nav");
     for (const p of PAGES) {
@@ -48,8 +48,10 @@ export function mountShell(host, { active } = {}) {
   return { bar, right: bar.querySelector(".right") };
 }
 
-// the studio's render progress in a header chip (polled every 2 s)
+// the studio's render progress in a header chip (polled every 2 s); a click opens the Queue modal
+// (ui/queue.js, the same one as the studio's Queue button)
 export function queueWidget(q) {
+  q.onclick = async () => (await import("/sa3/ui/queue.js")).toggleQueue();
   async function poll() {
     try {
       const d = await (await fetch("/sa3/progress", { cache: "no-store" })).json();

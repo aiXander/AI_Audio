@@ -1,5 +1,5 @@
 // SA3 UI kit: popup menus (right-click / "…" buttons). Closes on pick, Esc, or a click elsewhere.
-//   menu(x, y, [{label, fn, danger, disabled, hint} | "-"])
+//   menu(x, y, [{label, fn, danger, disabled, hint} | {head: "a heading"} | "-"])
 let open = null;
 export function closeMenu() { if (open) { open.remove(); open = null; } }
 export function menu(x, y, items) {
@@ -8,6 +8,7 @@ export function menu(x, y, items) {
   m.className = "ui-menu";
   for (const it of items) {
     if (it === "-") { const s = document.createElement("div"); s.className = "sep"; m.appendChild(s); continue; }
+    if (it.head) { const h = document.createElement("div"); h.className = "head"; h.textContent = it.head; m.appendChild(h); continue; }
     const b = document.createElement("button");
     b.className = it.danger ? "danger" : "";
     b.disabled = !!it.disabled;

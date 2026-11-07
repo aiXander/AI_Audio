@@ -45,11 +45,12 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
   full bar height, auto-play + Library right) above 40/60 columns (see _layout); resting the cursor 0.5 s in the gap
   between them shows a drag bar to resize (studio.js mountSplit, kept in
   localStorage, double-click resets),
-- restyles the LoRA panel into one card per slot (_lora_tags + studio.css):
-  file or loras/ pick + remove on one line, strength (0.05 steps) and the
-  From/To step window (the sampler steps the adapter is applied on) as
-  read-only readouts, an "N active" badge on the accordion header; the pick
-  dropdown lists every .safetensors under stable-audio-3/loras/ (_lora_library),
+- replaces the LoRA panel with the UI kit's LoRA stack (ui/lora.js, the same editor
+  as the Composer's Render settings; mounted by lora_link.js, synced through a
+  hidden JSON box, see _add_restore_settings and loras.py): a pick from
+  stable-audio-3/loras/ or a dropped file, strength, the From/To step window, an
+  "N active" badge on the accordion header; upstream's 3 slots stay hidden as the
+  values /generate reads,
 - adds the Promptless panel under the prompt (anarchy_ui.py: an `anarchy: …` prompt is a
   sampled conditioning spec, rendered through the normal Generate path),
 - makes seeds length-stable (noise.py: every noise draw is cropped from one fixed
@@ -113,6 +114,7 @@ import arranger_link  # noqa: E402  (Arranger button + "Send to SA3" from sa3lab
 import segments  # noqa: E402  (spans drawn on the inpaint / a2a input's dadaspec → mask / σ map)
 import condmix  # noqa: E402  (conditioning anchors blended per latent frame: the box's "cond")
 import condsrc  # noqa: E402  (what a render was conditioned on: a multi-anchor render's bank)
+import loras  # noqa: E402  (the loras/ library + the kit LoRA stack ↔ upstream's 3 slots)
 from composer import server as composer_server  # noqa: E402  (the Composer page + its /sa3/composer/* routes)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
@@ -149,13 +151,6 @@ PLACEHOLDER = {
     "Prompt": "Describe the sound. Tag-style works best, e.g.  "
               "TrackType: Music, Genre: Dub Techno, BPM: 120, Moods: Hypnotic",
 }
-# upstream's LoRA slot widgets → our labels + classes; studio.css turns each slot into
-# a compact card (file / library pick + remove on one line, strength full width,
-# the active-step window below). "Min/Max step" are the sampler steps the adapter
-# is applied on (1..Steps), relabelled because the narrow column cut them to "M".
-LORA_SLIDER = {"strength": ("Strength", "sa3-lora-str"),
-               "Min step": ("From step", "sa3-lora-step"),
-               "Max step": ("To step", "sa3-lora-step")}
 # the five gr.HTML slots of the output column, in creation order
 OUT_SLOTS = ["sa3-player", "sa3-timing", "sa3-error", "sa3-queued", "sa3-history"]
 
@@ -191,42 +186,23 @@ def _cls(kw, c):
 
 
 def _lora_tags(a, kw):
+    """Upstream's LoRA slot widgets stay as the hidden data carriers (lora_link.css hides
+    the groups that hold a .sa3-lora-file, and the add button); the kit stack is the UI."""
     lab = kw.get("label") or ""
-    if lab in LORA_SLIDER:
-        kw["label"], c = LORA_SLIDER[lab]
-        _cls(kw, c)
-        if c == "sa3-lora-str":
-            kw["step"] = 0.05           # upstream 0.1; step sliders stay integer
-    elif re.match(r"LoRA \d \(\.safetensors\)$", lab):       # gr.File
+    if re.match(r"LoRA \d \(\.safetensors\)$", lab):            # gr.File
         _cls(kw, "sa3-lora-file")
-        kw["show_label"], kw["height"] = False, None
-    elif lab.startswith("…or pick from loras/"):              # gr.Dropdown (only shown when loras/<model>/ has files)
-        _cls(kw, "sa3-lora-dd")
-        kw["show_label"] = False
-    elif (a[:1] or [kw.get("value")])[0] == "✕":              # gr.Button: remove slot
-        _cls(kw, "sa3-lora-rm")
+    elif lab.startswith("…or pick from loras/"):              # gr.Dropdown
+        kw["allow_custom_value"] = True     # any path under loras/, even one added after launch (loras.py)
     elif (a[:1] or [kw.get("value")])[0] == "+ Add LoRA":
         _cls(kw, "sa3-lora-add")
     return a, kw
 
 
-LORA_LIB = Path(__file__).resolve().parent.parent / "stable-audio-3" / "loras"
-
-
 def _lora_library(dit_name: str) -> list:
     """Replaces upstream's _lora_dd_choices: every .safetensors under
-    stable-audio-3/loras/ (subfolders included, same list for every model), shown
-    as its path relative to that folder without the extension. Natural sort:
-    digit runs compare as numbers, so `step=2000` lands before `step=14000`
-    (checkpoint names carry no leading zeros)."""
-    def natural(p):
-        return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower())
-                for t in re.split(r"(\d+)", str(p.relative_to(LORA_LIB))) if t]
-    hits = sorted((p for p in LORA_LIB.rglob("*.safetensors")
-                   if not any(part.startswith(".") for part in p.relative_to(LORA_LIB).parts)),
-                  key=natural)
-    return [("from loras/ folder…", up._DD_NONE)] + [
-        (str(p.relative_to(LORA_LIB).with_suffix("")), str(p)) for p in hits]
+    stable-audio-3/loras/ (loras.library: subfolders included, natural sort, same
+    list for every model)."""
+    return [("from loras/ folder…", up._DD_NONE)] + loras.library()
 
 
 def _accordion(a, kw):
@@ -547,7 +523,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
-CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl")
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl", "lora_link")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -598,13 +574,32 @@ def _add_restore_settings(demo):
     restored LoRAs pre-seeded into the memory under the target model, then
     overrides codec + seconds. Setting the DiT dropdown re-fires on_dit_change
     from the browser; the wrapper below makes that call a no-op for codec and
-    seconds when the model didn't really change (dit == prev_dit)."""
+    seconds when the model didn't really change (dit == prev_dit).
+
+    LoRAs: the kit LoRA stack (ui/lora.js, mounted by lora_link.js) replaces upstream's slot
+    widgets on screen; the 15 slot values stay the data carriers (loras.py), so /generate is
+    unchanged. The stack's list lives in a hidden JSON box (#sa3-lora-data): the model switch
+    and restore() write the incoming slots into it (the box is appended to on_dit_change's
+    outputs), and the stack's edits fill the slots (lora_apply)."""
     fns = {bf.name: bf for bf in demo.fns.values()}
     gen_bf, dit_bf, vis_bf = fns["generate"], fns["on_dit_change"], fns.get("_sync_dd_vis")
     (dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
      a2a, inpaint, inp_s, inp_e, _opts, _fmt) = gen_bf.inputs[:17]
     lora_dds = gen_bf.inputs[17:32][1::5]
     orig_dit = dit_bf.fn
+    mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
+    with demo:
+        lora_box = gr.Textbox(value="[]", elem_id="sa3-lora-data", container=False, show_label=False)
+        kit = gr.HTML('<div id="sa3-lora-kit"></div>', elem_classes=["sa3-lora-kitblk"])
+    acc = next(b for b in demo.blocks.values() if isinstance(b, gr.Accordion) and b.label == "LoRA adapters")
+    kit.parent.children.remove(kit)     # the stack's mount point (lora_link.js): first in the LoRA panel
+    acc.children.insert(0, kit)
+    kit.parent = acc
+
+    def lora_json(mem, dit_name, n_steps):
+        """The LoRA list of `dit_name`'s slots in the (post-switch) per-model memory."""
+        snap = (mem or {}).get(dit_name)
+        return json.dumps(loras.from_slots(sum(snap["slots"], []), int(n_steps)) if snap else [])
 
     @functools.wraps(orig_dit)
     def on_dit_change(dit_name, cur_seconds, cur_steps, prev, *rest):
@@ -612,9 +607,9 @@ def _add_restore_settings(demo):
         if dit_name == prev:        # programmatic re-set (restore), not a real switch
             out[0] = gr.update()
             out[1] = gr.update(maximum=up.MAX_SECONDS.get(dit_name, 120))
-        return tuple(out)
+        return tuple(out) + (lora_json(out[mem_idx], dit_name, cur_steps),)
     dit_bf.fn = on_dit_change
-    mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
+    dit_bf.outputs = list(dit_bf.outputs) + [lora_box]
 
     n_out = len(dit_bf.outputs) + 14
 
@@ -665,6 +660,7 @@ def _add_restore_settings(demo):
         out = list(orig_dit(tgt, cur_sec, n_steps, cur_dit if tgt != cur_dit else _RESTORE_PREV,
                             mem, vis, *slots))
         out[mem_idx] = {k: v for k, v in out[mem_idx].items() if k != _RESTORE_PREV}
+        out.append(lora_json(out[mem_idx], tgt, n_steps))   # lora_box, last of dit_bf.outputs
         max_s = up.MAX_SECONDS.get(tgt, 120)
         if r.get("decoder") in up.DECODER_CHOICES:
             out[0] = gr.update(value=r["decoder"])
@@ -715,6 +711,20 @@ def _add_restore_settings(demo):
         if vis_bf is not None:
             ev = ev.then(vis_bf.fn, inputs=[dit_dd], outputs=lora_dds, queue=False, show_progress="hidden")
         ev.then(None, js=up._JS_FIX_SLIDERS)
+
+        # the LoRA stack's edits → upstream's slots (+ visibility, so save() and the hidden
+        # widgets agree). Dropdown choices are rescanned so a fresh upload is a valid pick.
+        lora_slots_all = list(gen_bf.inputs[17:32])
+
+        def lora_apply(js, dit_name, n_steps):
+            items = loras.clean(js, int(n_steps))
+            ch = _lora_library(dit_name)
+            vals = loras.to_slots(items, int(n_steps))
+            for i in range(3):
+                vals[5 * i + 1] = gr.update(choices=ch, value=vals[5 * i + 1])
+            return vals + [[i < len(items) for i in range(3)]]
+        lora_box.change(lora_apply, inputs=[lora_box, dit_dd, steps], outputs=lora_slots_all + [dit_bf.inputs[5]],
+                        queue=False, show_progress="hidden", trigger_mode="always_last")
 
         # Session memory: every control (model, prompt, sampling, a2a / inpaint inputs,
         # LoRA slots) is snapshot into the prefs file on change and put back on page
@@ -900,6 +910,7 @@ def main():
     condsrc.install(persist)            # a multi-anchor render's tensors → <audio>.conds.npz on save
     outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
+    loras.install_routes()
     renderq.install_routes()
     anarchy_ui.install(up, persist)
     anarchy_ui.install_routes()

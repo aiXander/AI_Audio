@@ -20,7 +20,9 @@ No keys = the reference is unused (what "no spans" did before); all keys 0 = kee
   re-noise, so its next input is `ref·(1 − t) + n·t` with the noise draw every other frame gets
   (one uniform noise level, as the model trained: training noises the whole clip to one t);
 - a frame is held on every step input with t above `threshold(u)` (fractionally on the step
-  where it crosses), then denoises freely; kept frames (u 0) are pasted back at the end;
+  where it crosses), then denoises freely; kept frames (u 0) are pasted back at the end, as
+  latents, and again as audio after the decode (`paste_kept`: SAME-L's decode of exact latents is
+  still a reconstruction, so without it "keep" would lose high end on every re-inpaint);
 - the mask channel (`local_add_cond` = [keep, reference × keep]) is swapped per step via the
   closure cell of upstream's `model_fn`: kept frames 1; soft frames 1 while held and 0 once
   released (mask variant "B"; "A" = 0 throughout); regenerated frames 0.
@@ -199,6 +201,8 @@ def plan_record(plan) -> dict:
     holds (RULE), so the render regenerates exactly."""
     r = {"strength": [list(k) for k in plan["keys"]], "mask": plan["mask"],
          "kept": plan.get("kept", DEFAULT_KEPT), "rule": RULE}
+    if plan["keys"]:
+        r["paste"] = "audio"           # kept frames hold the reference's own audio (paste_kept)
     if plan.get("cond"):
         r["cond"] = plan["cond"]       # anchors + weight curves (condmix.py)
     return r
@@ -477,9 +481,75 @@ def install_sampler(up) -> None:
     up.sample_flow_pingpong = sample
 
 
+PASTE_FADE = 0.15                     # s: the kept-audio paste's crossfade (raised cosine, kept side)
+
+
+def splice_weights(keep, n: int, spl: int, fade: int | None = None):
+    """Per-sample weight (length n) of a reference pasted over decoded audio at its kept frames
+    (`keep`: bool per latent frame of `spl` samples): 1 inside a kept stretch, 0 elsewhere, and a
+    raised-cosine crossfade of `fade` samples (PASTE_FADE) inside each kept edge, so it ends exactly
+    where regenerated audio starts and has no slope jump at either end. The clip's own start and
+    end are no edge; a kept stretch shorter than two fades gets a shorter one."""
+    import numpy as np
+    fade = int(round(PASTE_FADE * 44100)) if fade is None else int(fade)
+    k = np.repeat(np.asarray(keep, bool), spl)[:n]
+    if k.size < n:
+        k = np.pad(k, (0, n - k.size), mode="edge")
+    w = k.astype(np.float32)
+    d = np.diff(np.r_[0, k.astype(np.int8), 0])
+    for s, e in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):   # kept runs [s, e)
+        L = min(fade, (e - s) // 2 if (s > 0 and e < n) else e - s)
+        if L < 2:
+            continue
+        ramp = (0.5 - 0.5 * np.cos(np.pi * (np.arange(L) + 0.5) / L)).astype(np.float32)
+        if s > 0:
+            w[s:s + L] = ramp
+        if e < n:
+            w[e - L:e] = np.minimum(w[e - L:e], ramp[::-1])
+    return w
+
+
+def paste_kept(audio, plan: dict, ref_path):
+    """The decoded render with its kept frames (strength 0) replaced by the reference's own audio,
+    crossfaded inside each kept edge (`splice_weights`). The sampler keeps those latents exact, but
+    SAME-L's decode of them is a reconstruction (waveform correlation ~.75-.85 to the input, up to
+    −10 dB above 16 kHz), and that loss would compound every time a render is inpainted again. The
+    reference is read exactly as the encoder read it (upstream's read_audio_any, from sample 0);
+    past its end (an Extend) it is silence, where frames are regenerated anyway."""
+    import numpy as np
+    spl = _up.SAMPLES_PER_LATENT
+    n = audio.shape[-1]
+    keep = frame_strength(plan["keys"], -(-n // spl)) <= 0.0
+    if not keep.any():
+        return audio
+    ref = _up.read_audio_any(str(ref_path))
+    ref = ref[:, :n] if ref.shape[-1] >= n else np.pad(ref, ((0, 0), (0, n - ref.shape[-1])))
+    w = splice_weights(keep, n, spl)
+    return (audio * (1.0 - w) + ref * w).astype(np.float32)
+
+
 def install(up, library) -> None:
-    """Sampler hook, the gen-record stamp, restore passthrough and the /sa3/inspec route."""
+    """Sampler hook, kept-audio paste, the gen-record stamp, restore passthrough and the /sa3/inspec route."""
+    import functools
+    import inspect
     install_sampler(up)
+
+    orig_run = up.run_generation
+    run_sig = inspect.signature(orig_run)
+
+    @functools.wraps(orig_run)
+    def run_generation(*a, **kw):
+        res = orig_run(*a, **kw)
+        plan = _active
+        if plan and plan.get("keys") and isinstance(res, tuple):
+            path = run_sig.bind(*a, **kw).arguments.get("inpaint_audio_path")
+            if path:
+                try:
+                    res = (paste_kept(res[0], plan, path), *res[1:])
+                except Exception as e:  # noqa: BLE001  never lose a render over the paste
+                    print(f"[segments] kept-audio paste failed ({e}); saving the decode as is", flush=True)
+        return res
+    up.run_generation = run_generation
 
     orig_rec = library.gen_record
 

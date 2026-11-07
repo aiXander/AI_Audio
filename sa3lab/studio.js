@@ -82,32 +82,6 @@
   }
 
   // Hide empty output slots; show an empty state in the player slot.
-  // LoRA slots: a slot is active when it holds a dropped file or a loras/ folder pick.
-  // Marks folder-picked slots (CSS drops their now-redundant drop zone) and puts
-  // "N active" on the accordion header. Hidden slots aren't rendered at all.
-  const LORA_NONE = "from loras/ folder…";      // studio.py _lora_library placeholder
-  function loraSync() {
-    let n = 0;
-    for (const f of document.querySelectorAll(".block.sa3-lora-file")) {
-      const card = f.closest(".styler");
-      const dd = card && card.querySelector(".sa3-lora-dd input");
-      const picked = !!dd && !!dd.value && dd.value !== LORA_NONE && !f.querySelector(".file-preview");
-      if (card) card.classList.toggle("sa3-lora-picked", picked);
-      if (picked || f.querySelector(".file-preview")) n++;
-    }
-    const hd = [...document.querySelectorAll(".label-wrap")].find((b) => b.textContent.trim().startsWith("LoRA adapters"));
-    if (!hd) return;
-    // gradio renders an accordion's content only after its first open, so open +
-    // close it once on load (same frame, no flash) to count preloaded/restored slots
-    if (!loraPrimed) {
-      loraPrimed = true;
-      if (!hd.classList.contains("open")) { hd.click(); requestAnimationFrame(() => { hd.click(); setTimeout(loraSync, 60); }); }
-    }
-    const lab = hd.querySelector(":scope > span");
-    if (lab) n ? lab.setAttribute("data-lora", `${n} active`) : lab.removeAttribute("data-lora");
-  }
-  let loraPrimed = false;
-  for (const ev of ["input", "change", "focusout", "click"]) document.addEventListener(ev, () => setTimeout(loraSync, 60), true);
 
   // Focus mode: the sidebar icon left of the logo (or "\") collapses the whole controls column so the
   // list of renders gets the full width; remembered in localStorage. Generate stays in the top bar.
@@ -216,7 +190,10 @@
       const content = el.querySelector(".prose") || el;
       const hasContent = !!content.textContent.trim() || !!content.querySelector("audio, img");
       const status = el.querySelector(":scope > .wrap");
-      const busy = !!status && !status.classList.contains("hide");
+      // a handler that raised (gr.Error, a bad input) leaves gradio's overlay up in its error state
+      // (.clear-status + span.error) for good: that's not a render, and Stop has nothing to cancel
+      const failed = !!status && !!status.querySelector(".clear-status, span.error");
+      const busy = !!status && !status.classList.contains("hide") && !failed;
       anyBusy = anyBusy || busy;
       // side slots collapse whenever they hold nothing; the player keeps its
       // empty state but drops it while a generation is running
@@ -236,7 +213,6 @@
     mountMore();
     hideDeleted();
     progressLoop(anyBusy);
-    loraSync();
     mountSplit();
     mountFocus();
     holdAnchor();                                      // last: every row has its final height now
@@ -503,6 +479,20 @@
       sync();
     });
   }
+
+  // ── right-click any rendered clip → "Show in Finder" (the kit's ui/reveal.js + menu, POST /sa3/reveal) ──
+  document.addEventListener("contextmenu", (e) => {
+    const blk = e.target.closest && e.target.closest(".sa3-player .blk, #sa3-out .blk, #sa3-hist .blk, #sa3-more .blk, #sa3-lib .blk");
+    const a = blk && blk.querySelector("audio");
+    if (!a || e.defaultPrevented) return;
+    e.preventDefault();
+    const x = e.clientX, y = e.clientY, name = clipName(a);
+    for (const h of ["/sa3/ui/vars.css", "/sa3/ui/components.css"]) {
+      if (!document.querySelector(`link[href="${h}"]`)) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = h; document.head.appendChild(l); }
+    }
+    Promise.all([import("/sa3/ui/menu.js"), import("/sa3/ui/reveal.js")])
+      .then(([m, r]) => m.menu(x, y, [{ head: name }, r.revealItem({ name })]));
+  });
 
   // ── drag any rendered clip onto an audio input on the left ──
   const MIME = "application/x-sa3-audio";
@@ -1258,12 +1248,19 @@
 
   // ── Queue: top-right button → small modal listing the render jobs (GET/POST /sa3/queue) ──
   // Every Generate click is a job in gradio's queue; renderq.py lists and edits it in place.
-  // The running job can be skipped (stops only it); waiting jobs can be deleted, moved
-  // with the arrows or dragged into a new order. Polls once a second while open.
-  const QMIME = "application/x-sa3-qjob";
-  let qEl = null, qTimer = null, qData = { running: null, waiting: [] }, qDrag = null, qSig = "", qServerN = 0;
+  // The modal itself is the UI kit's (sa3lab/ui/queue.js, shared with the Composer / Library
+  // header chip); this keeps the button, its badge and the Q shortcut.
+  let qMod = null, qData = { running: null, waiting: [] }, qServerN = 0;
+  const qOpen = () => !!(qMod && qMod.isOpen());
+  async function toggleQueue(want) {
+    if (!qMod) {
+      qMod = await import("/sa3/ui/queue.js");
+      qMod.onChange((d) => { qData = d; document.getElementById("sa3-qbtn")?.classList.toggle("on", qMod.isOpen()); paintQueueBadge(); });
+    }
+    qMod.toggleQueue(want);
+  }
   setInterval(async () => {                    // badge counts the server's queue, not just this tab's clicks
-    if (document.hidden || (qEl && qEl.classList.contains("open"))) return;   // open modal polls itself
+    if (document.hidden || qOpen()) return;   // open modal polls itself
     try {
       const r = await fetch("sa3/queue", { cache: "no-store" });
       if (r.ok) { const d = await r.json(); qServerN = (d.running ? 1 : 0) + d.waiting.length; paintQueueBadge(); }
@@ -1284,7 +1281,7 @@
   function paintQueueBadge() {
     const btn = document.getElementById("sa3-qbtn");
     if (!btn) return;
-    const open = qEl && qEl.classList.contains("open");
+    const open = qOpen();
     // closed: this tab's own jobs, or the server's whole queue if that's bigger (jobs from
     // another tab or anarchy/enqueue.py only exist server side; polled below)
     const n = open ? (qData.running ? 1 : 0) + qData.waiting.length
@@ -1294,145 +1291,8 @@
     btn.classList.toggle("live", n > 0);
   }
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && qEl && qEl.classList.contains("open")) { toggleQueue(false); return; }
     if (e.key === "q" && !e.metaKey && !e.ctrlKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) toggleQueue();
   });
-  function qChips(p) {
-    const c = [];
-    const n = (v) => (v === null || v === undefined ? "?" : +(+v).toFixed(2));
-    if (p.dit) c.push(p.dit + (p.decoder ? ` · ${p.decoder}` : ""));
-    if (p.seconds) c.push(`${n(p.seconds)} s`);
-    if (p.steps) c.push(`${p.steps} steps`);
-    if (p.cfg !== null && p.cfg !== undefined) c.push(`cfg ${n(p.cfg)}` + (p.apg !== undefined && p.apg !== 1 ? ` · apg ${n(p.apg)}` : ""));
-    c.push(p.seed ? `seed ${p.seed}` : "random seed");
-    if (p.sigma !== undefined) c.push(`σ ${n(p.sigma)}`);
-    let h = c.map((t) => `<span>${esc(String(t))}</span>`).join("");
-    for (const l of p.loras || []) h += `<span class="lo" title="LoRA">${esc(l.name)} ×${n(l.strength)}</span>`;
-    if (p.a2a) h += `<span class="au" title="Audio → audio guide">a2a ${esc(p.a2a.audio)} @${n(p.a2a.noise)}</span>`;
-    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${p.inpaint.keys != null ? p.inpaint.keys + (p.inpaint.keys === 1 ? " strength key" : " strength keys") : `${n(p.inpaint.from)}–${n(p.inpaint.to)} s`}</span>`;
-    if (p.neg) h += `<span class="ng" title="Negative prompt">neg: ${esc(p.neg)}</span>`;
-    return h;
-  }
-  function qRow(job, i) {
-    const p = job.preview || {}, run = i < 0;
-    const d = document.createElement("div");
-    d.className = "qj" + (run ? " run" : "");
-    d.dataset.id = job.id;
-    const pr = p.prompt ? esc(p.prompt) : "<i>(no prompt)</i>";
-    const acts = run
-      ? `<button class="skip" title="Stop this render only; the next job starts right away">Skip</button>`
-      : `<button class="up" title="Move up"${i === 0 ? " disabled" : ""}>▲</button>
-         <button class="dn" title="Move down"${i === qData.waiting.length - 1 ? " disabled" : ""}>▼</button>
-         <button class="del" title="Remove from the queue">${ICON_TRASH}</button>`;
-    d.innerHTML = `
-      <div class="hd">${run ? '<span class="now">rendering</span>' : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
-      <div class="bd"><div class="pr" title="${esc(p.prompt || "")}">${pr}</div><div class="ch">${qChips(p)}</div></div>
-      <div class="ac">${acts}</div>`;
-    if (!run) d.draggable = true;
-    return d;
-  }
-  function renderQueue() {
-    if (!qEl) return;
-    const sig = JSON.stringify(qData);
-    if (sig === qSig || qDrag) return;             // unchanged, or mid-drag: keep the DOM
-    qSig = sig;
-    const list = qEl.querySelector(".list"), kids = [];
-    if (qData.running) kids.push(qRow(qData.running, -1));
-    qData.waiting.forEach((j, i) => kids.push(qRow(j, i)));
-    if (!kids.length) {
-      const e = document.createElement("div");
-      e.className = "empty";
-      e.innerHTML = "Nothing queued.<br>Every Generate click (<kbd>⌘</kbd><kbd>↵</kbd>) adds a job here.";
-      kids.push(e);
-    }
-    list.replaceChildren(...kids);
-    const w = qData.waiting.length;
-    qEl.querySelector(".cnt").textContent = (qData.running ? "1 rendering" : "idle") + (w ? ` · ${w} waiting` : "");
-    qEl.querySelector(".clr").disabled = !w;
-    paintQueueBadge();
-  }
-  async function loadQueue() {
-    try { const r = await fetch("sa3/queue"); if (r.ok) { qData = await r.json(); renderQueue(); } }
-    catch (e) { /* server restarting */ }
-  }
-  async function qPost(body) {
-    try {
-      const r = await fetch("sa3/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const d = await r.json();
-      if (d.running !== undefined) { qData = { running: d.running, waiting: d.waiting }; qSig = ""; renderQueue(); }
-      if (!d.ok && d.error) console.warn("[sa3] queue:", d.error);
-    } catch (e) { console.warn("[sa3] queue op failed", e); }
-  }
-  function buildQueue() {
-    qEl = document.createElement("div");
-    qEl.id = "sa3-queue";
-    qEl.innerHTML = `
-      <div class="pane" role="dialog" aria-label="Render queue">
-        <header><h3>Queue</h3><span class="cnt"></span><span class="sp"></span>
-          <button class="clr" title="Remove every waiting job (the running one keeps going)">Clear waiting</button>
-          <button class="x" title="Close (Esc)">×</button></header>
-        <div class="list"></div>
-      </div>`;
-    document.body.appendChild(qEl);
-    qEl.addEventListener("mousedown", (e) => { if (e.target === qEl) toggleQueue(false); });
-    qEl.querySelector(".x").addEventListener("click", () => toggleQueue(false));
-    qEl.querySelector(".clr").addEventListener("click", () => qPost({ op: "clear" }));
-    const list = qEl.querySelector(".list");
-    list.addEventListener("click", (e) => {
-      const b = e.target.closest("button"), row = e.target.closest(".qj");
-      if (!b || !row || b.disabled) return;
-      const id = row.classList.contains("run") ? qData.running && qData.running.id : row.dataset.id;
-      const i = qData.waiting.findIndex((j) => j.id === row.dataset.id);
-      if (b.classList.contains("skip")) { b.disabled = true; qPost({ op: "skip", id }); }
-      else if (b.classList.contains("del")) { row.classList.add("gone"); qPost({ op: "delete", id }); }
-      else if (b.classList.contains("up")) qPost({ op: "move", id, to: i - 1 });
-      else if (b.classList.contains("dn")) qPost({ op: "move", id, to: i + 1 });
-    });
-    // drag to reorder: drop above/below the row under the cursor
-    const clearMarks = () => list.querySelectorAll(".above, .below").forEach((x) => x.classList.remove("above", "below"));
-    list.addEventListener("dragstart", (e) => {
-      const row = e.target.closest(".qj:not(.run)");
-      if (!row) return;
-      qDrag = row.dataset.id;
-      e.dataTransfer.setData(QMIME, qDrag);
-      e.dataTransfer.effectAllowed = "move";
-      row.classList.add("drag");
-    });
-    list.addEventListener("dragover", (e) => {
-      if (!qDrag) return;
-      const row = e.target.closest(".qj:not(.run)");
-      e.preventDefault();
-      clearMarks();
-      if (!row || row.dataset.id === qDrag) return;
-      const r = row.getBoundingClientRect();
-      row.classList.add(e.clientY < r.top + r.height / 2 ? "above" : "below");
-    });
-    list.addEventListener("drop", (e) => {
-      if (!qDrag) return;
-      e.preventDefault();
-      const row = list.querySelector(".above, .below"), id = qDrag;
-      clearMarks();
-      if (!row) return;
-      const ids = qData.waiting.map((j) => j.id).filter((x) => x !== id);
-      let to = ids.indexOf(row.dataset.id) + (row.classList.contains("below") ? 1 : 0);
-      qDrag = null;
-      qPost({ op: "move", id, to });
-    });
-    list.addEventListener("dragend", () => {
-      clearMarks();
-      list.querySelectorAll(".drag").forEach((x) => x.classList.remove("drag"));
-      if (qDrag) { qDrag = null; qSig = ""; renderQueue(); }
-    });
-  }
-  function toggleQueue(want) {
-    if (!qEl) buildQueue();
-    const open = want === undefined ? !qEl.classList.contains("open") : want;
-    qEl.classList.toggle("open", open);
-    document.getElementById("sa3-qbtn")?.classList.toggle("on", open);
-    clearInterval(qTimer); qTimer = null;
-    if (open) { qSig = ""; loadQueue(); qTimer = setInterval(loadQueue, 1000); }
-    paintQueueBadge();
-  }
 
   // ── progress: best-effort ETA from past render speeds (GET /sa3/progress) ──
   // The server only moves its projected finish time on real transitions (a sampling step

@@ -69,7 +69,7 @@ def _measure(proj: dict) -> tuple[dict, dict]:
     for k in ("pieces", "sequence"):
         if bare.get(k):
             bare[k] = [{**it, "fix": None, "_pi": n} if "id" in it else it for n, it in enumerate(bare[k])]
-    lay = compose.layout(bare, d / "cache" / "prefix")
+    lay = compose.layout(bare, d / "cache" / "prefix", xfades=False)   # measured on each clip's own audio
     out, dirty = {}, False
     for pc in lay["pieces"]:
         k = pc["audio_key"]
@@ -110,10 +110,16 @@ def _after(a: dict, fix: dict | None) -> dict:
     return b
 
 
+def _lora_names(items) -> list:
+    """Adapter file names without folder or extension: a sidecar records name + path, a project
+    (model.loras, the kit LoRA stack) only the path, so both compare by file name."""
+    return sorted(Path(x.get("path") or x.get("name") or "").name.removesuffix(".safetensors") for x in items or [])
+
+
 def _loras(rid: str) -> list:
     try:
         p = compose.piece_audio_path(rid)
-        return sorted(x.get("name") or x.get("path") or "" for x in (compose._sidecar(p).get("gen") or {}).get("loras") or [])
+        return _lora_names((compose._sidecar(p).get("gen") or {}).get("loras"))
     except SystemExit:
         return []
 
@@ -145,7 +151,7 @@ def report(proj: dict) -> dict:
            "lufs": proj.get("lufs") if proj.get("lufs") is not None else (post[ref_i]["lufs"] if ref_i is not None else None),
            "bands": post[ref_i]["bands"] if ref_i is not None else None,
            "width": post[ref_i]["width"] if ref_i is not None else None,
-           "loras": sorted(x.get("name") or x.get("path") or "" for x in (proj.get("model") or {}).get("loras") or [])}
+           "loras": _lora_names((proj.get("model") or {}).get("loras"))}
     rows, issues = [], []
     for i, (pc, a, b) in enumerate(zip(pcs, pre, post)):
         dims = {}
@@ -236,7 +242,7 @@ def report(proj: dict) -> dict:
             if post[x].get("key") and post[y].get("key"):
                 c = keyfind.compatible(post[x]["key"], post[y]["key"])
                 o["dims"]["key"] = {"state": "ok" if c else "bad", "msg": f"{post[x]['key']} over {post[y]['key']}"}
-            ga, gb = _level(items[x]), _level(items[y])
+            ga, gb = (_level(items[x]) + _track_db(proj, items[x])), (_level(items[y]) + _track_db(proj, items[y]))
             if post[x].get("bands") and post[y].get("bands") and post[x].get("lufs") is not None and post[y].get("lufs") is not None:
                 la = [post[x]["lufs"] + ga + v for v in post[x]["bands"]]
                 lb = [post[y]["lufs"] + gb + v for v in post[y]["bands"]]
@@ -267,6 +273,10 @@ def report(proj: dict) -> dict:
 
 def _level(it: dict) -> float:
     return float((it.get("mix") or {}).get("gain") or 0)
+
+
+def _track_db(proj: dict, it: dict) -> float:     # the track fader: part of how loud a layer sits in the mix
+    return float(compose.track_mix(proj, it).get("gain") or 0)
 
 
 def recommend(proj: dict, rep: dict | None = None) -> dict:

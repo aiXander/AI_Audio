@@ -668,6 +668,10 @@
       }
       const url = srcOf(blk);
       blk.classList.toggle("sa3seg-on", !!url);
+      // the accordion around it lights up (segments.css) even when collapsed: a forgotten reference
+      // still steers every render, so it must be visible at a glance
+      const acc = blk.closest(".block:has(> .label-wrap)");
+      if (acc) acc.classList.toggle("sa3-has-audio", !!url);
       if (url !== e.url) {
         if (url) setSrc(e, url);
         else { e.url = null; e.au.pause(); e.au.removeAttribute("src"); full(e, false); }

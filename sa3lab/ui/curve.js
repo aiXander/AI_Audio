@@ -6,13 +6,14 @@ export const SPL = 4096 / 44100;                     // one latent frame, second
 export const r3 = (v) => Math.round(v * 1000) / 1000;
 export const r4 = (v) => Math.round(v * 10000) / 10000;
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-export function at(K, t) {                          // value at t, from the right (post-jump)
+export const ease = (f) => (1 - Math.cos(Math.PI * f)) / 2;   // smooth interpolation: cosine, never past either key
+export function at(K, t, smooth = false) {          // value at t, from the right (post-jump); smooth: eased between keys
   if (!K.length) return 0;
   const j = K.findIndex((k) => k[0] > t);
   if (j < 0) return K[K.length - 1][1];
   if (j === 0) return K[0][1];
-  const a = K[j - 1], b = K[j];
-  return a[1] + ((t - a[0]) / (b[0] - a[0])) * (b[1] - a[1]);
+  const a = K[j - 1], b = K[j], f = (t - a[0]) / (b[0] - a[0]);
+  return a[1] + (smooth ? ease(f) : f) * (b[1] - a[1]);
 }
 export function before(L, t) {                      // value just before t (pre-jump)
   if (!L.length) return 0;
@@ -32,7 +33,9 @@ export function heal(L, a, b) {                     // drop [a, b]; the curve re
   const fl = before(L, a), fr = after(L, b);
   return [...L.filter((k) => k[0] < a), [a, fl], [b, fr], ...L.filter((k) => k[0] > b)];
 }
-export function norm(L) {                           // drop redundant keys; all-zero = no curve
+// drop redundant keys; all-zero = no curve. keepZero: keep an all-zero curve (a volume at silence);
+// prune: false keeps keys on a flat stretch (a volume curve: two points at one level start a ramp)
+export function norm(L, { keepZero = false, prune = true } = {}) {
   L = L.map((k) => [r3(k[0]), r4(clamp(k[1], 0, 1))]);
   let out = [];
   for (const k of L) {
@@ -41,7 +44,7 @@ export function norm(L) {                           // drop redundant keys; all-
     else out.push(k);
   }
   out = out.filter((k, i) => !(i > 0 && k[0] === out[i - 1][0] && k[1] === out[i - 1][1]));
-  let changed = true;
+  let changed = prune;
   while (changed) {
     changed = false;
     for (let i = 0; i < out.length; i++) {
@@ -50,7 +53,7 @@ export function norm(L) {                           // drop redundant keys; all-
       if ((p || n) && flatL && flatR && !(p && p[0] === k[0]) && !(n && n[0] === k[0])) { out.splice(i, 1); changed = true; break; }
     }
   }
-  return out.every((k) => k[1] <= 0) ? [] : out;
+  return !keepZero && out.every((k) => k[1] <= 0) ? [] : out;
 }
 export function end(K) {                            // segments.py plan_end
   let e = 0, prev = 0;

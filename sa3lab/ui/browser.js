@@ -3,7 +3,7 @@
 // compact in its side panel. ("More like this" was taken out of the UI for now; the server's
 // /sa3/embed/similar and `embed.py` still exist, unused here.)
 //
-//   const br = new Browser(host, {compact, onAdd(row, [s0, s1]), view: "grid" | "map"})
+//   const br = new Browser(host, {compact, onAdd(row, [s0, s1]), addLabel, view: "grid" | "map"})
 //   br.reload()
 //
 // Data: GET /sa3/composer/starred (rows incl. highlights + their analysis), /sa3/embed/map (PCA +
@@ -29,8 +29,8 @@ function compatible(a, b) {
 const COLORS = ["#a99cff", "#5ed1b5", "#ffb86b", "#ff6b81", "#7ec8ff", "#e6e27a"];
 
 export class Browser {
-  constructor(host, { compact = false, onAdd = null, view = "grid" } = {}) {
-    this.o = { compact, onAdd };
+  constructor(host, { compact = false, onAdd = null, addLabel = "Add", view = "grid" } = {}) {
+    this.o = { compact, onAdd, addLabel };
     this.view = view;
     this.rows = [];
     this.lasso = null;        // Set of ids
@@ -105,7 +105,7 @@ export class Browser {
       body.appendChild(c);
     }
     if (this.view === "map") return this.paintMap(body, rows);
-    const opts = { onAdd: this.o.onAdd, compact: this.o.compact, known: this.known,
+    const opts = { onAdd: this.o.onAdd, addLabel: this.o.addLabel, compact: this.o.compact, known: this.known,
       onChanged: () => {} };
     let n = 0;
     const list = rows.slice().sort((a, b) => (sort === "score" ? (b.score ?? -1) - (a.score ?? -1) : String(b.ts).localeCompare(String(a.ts))));

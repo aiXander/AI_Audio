@@ -135,7 +135,7 @@ def _prompt_vec(p: Path) -> np.ndarray | None:
     anchors, w = condsrc.mean_weights(p)
     acc, tot = None, 0.0
     for a, wi in zip(anchors, w):
-        if wi <= 1e-4:
+        if wi <= 1e-4 or condsrc.muted(a):              # a muted stretch had no conditioning
             continue
         a = condsrc.expand(a)
         try:

@@ -42,6 +42,8 @@ FastAPI app (so a score click never waits behind a running render in the queue):
     GET  /sa3/boot                  → server boot id (the page reloads when it changes)
     GET  /sa3/library               → every render as a filterable row (Library modal)
     GET  /sa3/spec?name=  /sa3/audio?name=   its spectrogram jpeg / audio file
+    POST /sa3/reveal {name | id}    show the render's file selected in Finder (`open -R`; the
+                                    right-click "Show in Finder" on every clip, ui/reveal.js)
 
 **Render ids.** `name` is a bare filename in the active folder (OUT_DIR), so the studio page is
 untouched. Every route above that takes a render (label GET/POST, settings, star, spec, audio)
@@ -778,10 +780,20 @@ def install_routes() -> None:
         p = _audio_path(ref(name, id))
         return FileResponse(p) if p else JSONResponse({"error": "unknown file"}, status_code=404)
 
+    async def reveal_post(request: Request):   # POST /sa3/reveal {name | id}: the file selected in Finder
+        import subprocess
+        d = await request.json()
+        p = _audio_path(ref(d.get("name", ""), d.get("id")))
+        if not p or not p.is_file():
+            return JSONResponse({"error": "unknown file"}, status_code=404)
+        subprocess.Popen(["open", "-R", str(p.resolve())])   # a starred symlink reveals the real file
+        return JSONResponse({"ok": True, "path": str(p.resolve())})
+
     orig = routes.App.create_app
 
     def create_app(*a, **kw):
         app = orig(*a, **kw)
+        app.add_api_route("/sa3/reveal", reveal_post, methods=["POST"])
         app.add_api_route("/sa3/label", label_get, methods=["GET"])
         app.add_api_route("/sa3/label", label_post, methods=["POST"])
         app.add_api_route("/sa3/delete", delete_post, methods=["POST"])

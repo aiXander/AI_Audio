@@ -9,18 +9,26 @@ page reload; these routes need `make start`.
                                               (cond: it has conditioning beyond a prompt, an anarchy bag or a
                                               take's anchors; cond_n: how many anchors, condsrc.summary)
     GET  /sa3/composer/projects             → [{name, mtime, takes}] under outputs/composer/
-    GET  /sa3/composer/project?name=        → {project, layout (last build), takes, job}
+    GET  /sa3/composer/project?name=        → {project, layout (last build), takes, clips, jobs, saved}
+    POST /sa3/composer/version {name, project} → ⌘S: saved.json = {saved_at, project} (one, overwritten)
+                                              + a background deep copy of its outside sources (vault.py)
+    POST /sa3/composer/revert {name}        → project.json ← the last ⌘S, built → {layout, project}
     POST /sa3/composer/save {name, project} → writes project.json (autosave), then builds it:
                                               → {layout} | {layout: null, error}
     GET  /sa3/composer/ref?name=[&spec=1]   → the built reference WAV (what SA3 keeps), or its dadaspec
-    POST /sa3/composer/render {name, seeds, section?} → queue one take per seed into this studio's own
-                                              queue; section [t0, t1] renders only that stretch
-                                              (compose.submit_section: `composite.section` on the take)
-    GET  /sa3/composer/status?name=         → the render job: {running, done, total, log, error}
+    POST /sa3/composer/render {name, seeds, section?} → queue one batch (one take per seed) into this
+                                              studio's own queue → {job}; section [t0, t1] renders only that
+                                              stretch (compose.submit_section: `composite.section` on the take).
+                                              Batches stack: Render again while one runs queues another
+    GET  /sa3/composer/status?name=         → {jobs: [{id, running, done, total, section, log, error}]}:
+                                              batches running or ended in the last 10 min
     POST /sa3/composer/promote {name, take} → the take becomes the project's new base (below)
     POST /sa3/composer/take_remove {name, take, mode} → take off the lanes: mode "keep" stars it
                                               (outputs/starred/, the Library) and stamps label.shelved,
-                                              "trash" = the studio's trash (score 0, moved to takes/deleted/)
+                                              "trash" = the studio's trash (score 0, moved to takes/deleted/);
+                                              a take the tracks still read is frozen + repointed first
+    POST /sa3/composer/freeze {name, take, label?} → the take's frozen copy in clips/ (kept takes, below):
+                                              {id, row}; every clip the page lifts from a take reads this id
     POST /sa3/composer/convert {name}       → a `sequence` project → explicit `pieces` on track 0 (the
                                               last build's `at`s; the editor does this on open)
     GET  /sa3/composer/piece?name=&k=       → one piece's cached audio (aligned + fixed + faded, before
@@ -37,9 +45,13 @@ page reload; these routes need `make start`.
     GET  /sa3/app                           → the tab host (sa3lab/ui/app.html: Studio · Library ·
                                               Composer · Arranger, each kept alive in its own iframe)
 
-**Project folder** `outputs/composer/<name>/`: `project.json` (the editor's state, autosaved),
+**Project folder** `outputs/composer/<name>/`: `project.json` (the editor's state, autosaved on
+every edit), `saved.json` (the last ⌘S: the version you chose to keep; Revert goes back to it),
+`.vault/` (the ⌘S deep copy of every source file outside this folder that it reads: vault.py),
 `ref.wav` + `box.<variant>.json` + `project.resolved.json` (the last build: compose.build),
-`takes/` (the renders: studio sidecars with `gen.composite`), `jobs/<stamp>/` (each render
+`takes/` (the renders: studio sidecars with `gen.composite`), `clips/` (kept takes: frozen copies
+of every take a clip or the base reads, so trashing / deleting the take never touches the
+timeline; `freeze`), `jobs/<stamp>/` (each render
 batch's frozen project.json + boxes, so editing during a render can't swap the reference under
 queued jobs; its ref.wav is deleted once the batch is done, the take's lineage keeps its sha256).
 
@@ -49,7 +61,8 @@ phase-0 / phase-1 shapes into it:
 - *assemble*: a `sequence` of pieces (render id + source range) and `{"gap": s}` items, laid out
   end to end with beat alignment (compose.layout); `seam` beats each side of an inner piece edge
   are regenerated. Extend = a trailing gap.
-- *base* (after **promote**): `pieces` = the take over [0, length] at 0 on track 0, `align: false`
+- *base* (after **promote**): `pieces` = the take's frozen copy (`base`; `base_take` = the take it
+  came from, so the page still marks that lane "base") over [0, length] at 0 on track 0, `align: false`
   (a take is already on the grid: re-snapping would shift it; its measured tempo dominates the
   live BPM estimate by length), `rewrite` = the strength curve drawn on it. New pieces can be layered over the base on other
   tracks. The take contributes the anchors + weight curves it was rendered on (condsrc.of_render:
@@ -67,12 +80,16 @@ curves (with a readable label per anchor) so the lane can draw what SA3 will act
 
 Submission runs on a thread here (gradio drops a client's waiting jobs when it disconnects), with
 a loopback gradio_client to this server's own URL, so a test studio on another port renders into
-itself. At most 4 of its jobs wait at once, so Generate clicks in the studio interleave.
+itself. Every take is submitted at once (no window), so the studio's queue holds them all: it is
+one FIFO with Generate clicks, and the Queue modal (ui/queue.js, any page) reorders / deletes /
+skips them. A take deleted there completes empty; its batch logs it as "removed", not a failure.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -100,7 +117,7 @@ for _p in (str(HERE), str(SA3LAB)):                  # compose.py imports as `co
 import condsrc  # noqa: E402  (what a render was conditioned on)
 
 _locks: dict[str, threading.Lock] = {}
-_jobs: dict[str, dict] = {}
+_jobs: dict[str, list[dict]] = {}   # project → its render batches this session, oldest first
 _rows: dict[str, tuple[float, dict]] = {}
 
 
@@ -207,7 +224,12 @@ def takes(name: str) -> list[dict]:
                     "score": lab.get("score"), "starred": bool(lab.get("starred")),
                     "played": bool(lab.get("played")), "job": c.get("project_file"),
                     "ref_sha256": c.get("ref_sha256"), "has_spec": bool(sc.get("spec_b64")),
-                    "section": c.get("section")})
+                    "section": c.get("section"),
+                    # the clips it was rendered from, where they sat then (timeline seconds): the page
+                    # aligns a lifted stretch to where those clips sit now (composer.js liftHome)
+                    "pieces": [{"id": q.get("id"), "at": q.get("at"), "dur": q.get("dur"), "track": q.get("track", 0),
+                                "src": q.get("src_cut") or q.get("src"), "stretch": q.get("stretch") or 1.0}
+                               for q in c.get("pieces") or [] if q.get("id") and q.get("at") is not None and q.get("dur")]})
     out.sort(key=lambda r: r["ts"], reverse=True)
     return out
 
@@ -234,7 +256,7 @@ def _view(lin: dict, keys, cond: dict | None = None) -> dict:
     return {"length": lin["length"], "bpm": lin["bpm"],
             "pieces": [pc | {"src_len": _src_len(pc["id"])} | _src_cond(pc["id"]) for pc in lin["pieces"]],
             "gaps": [[r["t0"], r["t1"]] for r in lin.get("regions", []) if r.get("type") == "gap"],
-            "muted": lin.get("muted") or [], "meter": lin.get("meter") or {}, "silent": lin.get("silent") or [],
+            "muted": lin.get("muted") or [], "xfades": lin.get("xfades") or [], "meter": lin.get("meter") or {}, "silent": lin.get("silent") or [],
             "keys": keys, "cond": c, "ref_sha256": lin.get("ref_sha256")}
 
 
@@ -276,25 +298,42 @@ def last_layout(name: str) -> dict | None:
 
 
 # ── render: one take per seed, on a thread ───────────────────────────────────────────────────
+def jobs(name: str) -> list[dict]:
+    """The project's batches still rendering + those that ended in the last 10 min (errors to show)."""
+    now = time.time()
+    keep = [j for j in _jobs.get(name, []) if j["running"] or now - j.get("ended", now) < 600]
+    _jobs[name] = keep
+    return keep
+
+
 def render(name: str, seeds: list[int], url: str, section: list | None = None) -> dict:
+    """Queue one batch: every take goes straight into the studio's gradio queue (the same queue
+    as Generate clicks: listed, reordered, deleted, skipped in the Queue modal). Batches never
+    block each other: each has its own frozen snapshot + thread."""
     import compose
-    job = _jobs.get(name)
-    if job and job.get("running"):
-        return {"error": "a render of this project is already running"}
     d = _dir(name)
     proj = _read(d / "project.json")
     if not proj or not _has_pieces(proj):
         return {"error": "nothing to render: add a piece first"}
-    snap = d / "jobs" / time.strftime("%Y%m%d-%H%M%S")
-    snap.mkdir(parents=True, exist_ok=True)
+    stamp, n = time.strftime("%Y%m%d-%H%M%S"), 0
+    while True:                                      # two clicks in one second → two snapshots
+        snap = d / "jobs" / (stamp + (f"-{n}" if n else ""))
+        try:
+            snap.mkdir(parents=True)
+            break
+        except FileExistsError:
+            n += 1
     _write(snap / "project.json", proj)
-    job = {"running": True, "started": time.time(), "seeds": seeds, "total": len(seeds), "done": 0,
-           "log": [], "error": None, "snapshot": str(snap.relative_to(OUTPUTS)), "section": section}
-    _jobs[name] = job
+    job = {"id": snap.name, "running": True, "started": time.time(), "seeds": seeds, "total": len(seeds),
+           "done": 0, "log": [], "error": None, "snapshot": str(snap.relative_to(OUTPUTS)), "section": section}
+    _jobs.setdefault(name, []).append(job)
 
     def log(m: str) -> None:
         job["log"] = (job["log"] + [m])[-40:]
-        if m.startswith(("done ", "FAIL ")):
+        w = re.match(r"^(\d+) windows: ", m)            # past 380 s: one job per window per seed (submit_windows)
+        if w:
+            job["total"] = int(w.group(1)) * len(seeds)
+        if m.startswith(("done ", "FAIL ", "removed ")):
             job["done"] += 1
         if m.startswith("FAIL "):
             job["error"] = m
@@ -304,7 +343,7 @@ def render(name: str, seeds: list[int], url: str, section: list | None = None) -
             p = compose.load(snap / "project.json")
             p["name"] = name
             p["_cache"] = str(d / "cache")
-            compose.submit(p, url, outdir=f"composer/{name}/takes", window=4, log=log, seeds=seeds, section=section)
+            compose.submit(p, url, outdir=f"composer/{name}/takes", window=10_000, log=log, seeds=seeds, section=section)
         except SystemExit as e:
             job["error"] = str(e)
         except Exception as e:  # noqa: BLE001
@@ -318,14 +357,98 @@ def render(name: str, seeds: list[int], url: str, section: list | None = None) -
     return {"ok": True, "job": job}
 
 
+# ── kept takes: a take's audio frozen into the project, so its clips outlive the take ────────
+# A clip lifted from a take (or a promoted base) never points at the take itself: the take is
+# first *frozen* into `clips/` — audio and `.conds.npz` bank hardlinked (zero extra disk while the
+# take exists; the data stays when the take is trashed or deleted anywhere: composer, Library,
+# studio), the sidecar copied with its labels dropped and a `clip` block {from, project, seed,
+# label, frozen}. The whole take is kept, so a clip's edges can still be trimmed outward later.
+# The copy is a complete render: condsrc reads its conditioning from its own bank, the spectrogram
+# from its sidecar. One frozen copy per take per project, reused by every clip cut from it.
+_freeze_lock = threading.Lock()
+TAKE_ID_RE = re.compile(r"^composer/[A-Za-z0-9][A-Za-z0-9_-]{0,63}/takes/[^/]+$")
+
+
+def _link(src: Path, dst: Path) -> None:
+    try:
+        os.link(src, dst)
+    except OSError:                                  # another filesystem: a real copy
+        shutil.copy2(src, dst)
+
+
+def clip_row(p: Path) -> dict:
+    import library
+    import segments
+    sc = _read(p.with_name(p.name + ".json"), {}) or {}
+    c = sc.get("clip") or {}
+    lab = c.get("label") or (f"take seed {c['seed']}" if c.get("seed") is not None else p.stem)
+    return {"id": library.render_id(p), "name": lab, "prompt": lab, "seconds": round(segments.duration(str(p)) or 0, 4),
+            "from": c.get("from"), "folder": "kept take"}
+
+
+def clips(name: str) -> list[dict]:
+    d = _dir(name) / "clips"
+    return [clip_row(p) for p in sorted(d.iterdir()) if p.suffix.lower() in AUDIO_EXT] if d.is_dir() else []
+
+
+def freeze(name: str, take_id: str, label: str | None = None) -> dict:
+    """A composer take (this project's or another's) → its frozen copy in this project's clips/:
+    {id, row}. An id already in clips/ comes back as is."""
+    import library
+    from datetime import datetime
+    cd = _dir(name) / "clips"
+    p = library.resolve_id(take_id)
+    if p is None:
+        return {"error": f"no take {take_id!r} (already trashed?)"}
+    rid = library.render_id(p)
+    if p.parent == cd.resolve():
+        return {"id": rid, "row": clip_row(p)}
+    if not TAKE_ID_RE.match(rid or ""):
+        return {"error": f"{rid!r} is not a composer take"}
+    src_proj = rid.split("/")[1]
+    condsrc.of_render(p)                             # an older take without a bank gets one now, while its sources resolve
+    with _freeze_lock:
+        cd.mkdir(parents=True, exist_ok=True)
+        stem = p.name if src_proj == name else f"{src_proj}__{p.name}"
+        dst, i = cd / stem, 1
+        while dst.exists():
+            j = _read(dst.with_name(dst.name + ".json"), {}) or {}
+            if (j.get("clip") or {}).get("from") == rid or dst.stat().st_ino == p.stat().st_ino:
+                return {"id": library.render_id(dst), "row": clip_row(dst)}
+            dst, i = cd / f"{Path(stem).stem}.{i}{p.suffix}", i + 1
+        sc = _read(p.with_name(p.name + ".json"), {}) or {}
+        bank = p.with_name(p.name + condsrc.BANK_EXT)
+        if bank.is_file():
+            _link(bank, dst.with_name(dst.name + condsrc.BANK_EXT))
+        sc |= {"name": dst.name, "label": {},
+               "clip": {"from": rid, "project": src_proj, "seed": (sc.get("gen") or {}).get("seed"),
+                        "label": label, "score": (sc.get("label") or {}).get("score"),
+                        "frozen": datetime.now().isoformat(timespec="seconds")}}
+        _write(dst.with_name(dst.name + ".json"), sc)
+        _link(p, dst)                                # last: the audio's presence marks a complete copy
+    return {"id": library.render_id(dst), "row": clip_row(dst)}
+
+
+def _repoint(proj: dict, old: str, new: str) -> dict:
+    """Every clip (and the base) of `proj` that reads `old` reads `new` instead."""
+    for it in (proj.get("pieces") or []) + (proj.get("sequence") or []):
+        if it.get("id") == old:
+            it["id"] = new
+    if proj.get("base") == old:
+        proj["base"], proj["base_take"] = new, old
+    return proj
+
+
 # ── remove a take from the lanes: keep it (star) or trash it ─────────────────────────────────
 def take_remove(name: str, take_id: str, mode: str) -> dict:
     """"keep": star the take (library.star_render: it joins outputs/starred/, so the Library and the
     side panel offer it as a piece) and stamp `label.shelved`, which takes() skips; the files stay in
     takes/. "trash": library.delete_render, the studio's trash (score 0, label.deleted, audio +
     sidecar + .conds.npz moved to takes/deleted/, kept as a negative row). Unstarring a kept take (Library,
-    studio) puts it back on the lanes. The base take and a take
-    used as a clip on the tracks can be kept but not trashed (the build reads their audio)."""
+    studio) puts it back on the lanes. A take the tracks still read directly (a project from before
+    kept takes, or a clip dragged in some other way) is frozen first and its clips repointed, so
+    trashing it never changes the timeline: the reply then carries the new `project` + `layout`
+    and `repointed` {old: new} (the page rewrites its undo history with it)."""
     import library
     from datetime import datetime
     d = _dir(name)
@@ -333,11 +456,16 @@ def take_remove(name: str, take_id: str, mode: str) -> dict:
     if p is None or p.resolve().parent != (d / "takes").resolve():
         return {"error": f"no take {take_id!r} in this project"}
     proj = _read(d / "project.json", {}) or {}
+    extra = {}
     if mode == "trash":
-        if proj.get("base") == take_id:
-            return {"error": "this take is the base (the timeline itself): promote another take first"}
-        if any(it.get("id") == take_id for it in (proj.get("pieces") or []) + (proj.get("sequence") or [])):
-            return {"error": "this take is a clip on the tracks: delete that clip first"}
+        if proj.get("base") == take_id or any(it.get("id") == take_id for it in (proj.get("pieces") or []) + (proj.get("sequence") or [])):
+            f = freeze(name, take_id)
+            if f.get("error"):
+                return f
+            proj = _repoint(proj, take_id, f["id"])
+            s = save(name, proj)
+            extra = {"project": proj, "layout": s.get("layout"), "build_error": s.get("error"),
+                     "repointed": {take_id: f["id"]}, "clips": clips(name)}
         if not library.delete_render(p):
             return {"error": "couldn't trash it"}
     elif mode == "keep":
@@ -349,7 +477,7 @@ def take_remove(name: str, take_id: str, mode: str) -> dict:
             _write(sc, j)
     else:
         return {"error": f"bad mode {mode!r}"}
-    return {"ok": True, "takes": takes(name)}
+    return extra | {"ok": True, "takes": takes(name)}
 
 
 # ── promote: a take becomes the base ─────────────────────────────────────────────────────────
@@ -364,20 +492,55 @@ def promote(name: str, take_id: str) -> dict:
     comp = (sc.get("gen") or {}).get("composite") or {}
     if comp.get("section"):
         return {"error": "a section take covers only part of the timeline: render the whole piece to promote"}
+    f = freeze(name, take_id)                          # the base reads the take's frozen copy (kept takes, above)
+    if f.get("error"):
+        return f
     with _lock(name):
         proj = _read(d / "project.json") or {}
         L = float(segments.duration(str(p)) or comp.get("length") or 0)
         anchor = proj.get("anchor")                    # unset: the base take's dominant anchor (global_anchor)
         prev = {k: v for k, v in proj.items() if k != "history"}
         ghost = [{"id": x["id"], "at": x["at"], "dur": x["dur"], "track": x.get("track", 0)} for x in (comp.get("pieces") or [])]
+        master = proj.get("master")                    # the base already carries the master gain: applying it
+        if master and master.get("gain"):              # again would raise it every promote (the limiter stays)
+            master = {**master, "gain": 0.0}
         new = {"name": name, "model": proj.get("model"), "seeds": proj.get("seeds"),
-               "cond": proj.get("cond"), "master": proj.get("master"),
-               "base": take_id, "pieces": [{"id": take_id, "src": [0.0, round(L, 4)], "at": 0.0, "track": 0,
-                                            "align": False, "fade": [0.0, 0.0]}],
+               "cond": proj.get("cond"), "master": master,
+               "base": f["id"], "base_take": take_id,
+               "pieces": [{"id": f["id"], "src": [0.0, round(L, 4)], "at": 0.0, "track": 0,
+                           "align": False, "fade": [0.0, 0.0]}],
                "rewrite": [], "length": round(L, 4), "seam": 0, "anchor": anchor, "ghost": ghost,
                "history": (proj.get("history") or []) + [prev | {"promoted_to": take_id, "at_ts": time.time()}]}
         new = {k: v for k, v in new.items() if v is not None}
     return save(name, new) | {"project": new}
+
+
+# ── saved version (⌘S): project.json is the autosaved working state, saved.json the last ⌘S ───
+def saved(name: str) -> dict | None:
+    return _read(_dir(name) / "saved.json")
+
+
+def save_version(name: str, proj: dict) -> dict:
+    """⌘S: `proj` (what the page shows, already autosaved + built) becomes the project's one saved
+    version, overwriting the previous one. → {saved_at}"""
+    d = _dir(name)
+    if not (d / "project.json").is_file():
+        return {"error": f"no project {name!r}"}
+    proj = {k: v for k, v in proj.items() if not k.startswith("_")} | {"name": name}
+    at = time.time()
+    with _lock(name):
+        _write(d / "saved.json", {"saved_at": at, "project": proj})
+    import vault
+    vault.schedule(name, d, proj)                    # deep copy of its outside sources, on a thread (vault.py)
+    return {"ok": True, "saved_at": at}
+
+
+def revert(name: str) -> dict:
+    """The working state goes back to the last ⌘S (then builds). → save()'s reply + {project}"""
+    sv = saved(name)
+    if not sv or not sv.get("project"):
+        return {"error": "this project has never been saved with ⌘S"}
+    return save(name, sv["project"]) | {"project": sv["project"]}
 
 
 # ── convert / fit / A-B / imports / export ─────────────────────────────────────────────────────
@@ -472,7 +635,7 @@ def ab_audio(name: str, pi: int, fixed: bool) -> Path:
     proj = compose.load(d / "project.json")
     key = "sequence" if proj.get("sequence") else "pieces"
     it = proj[key][pi]
-    one = {**proj, key: [{**it, "mute": False, "solo": False, "at": 0.0}], "length": None}
+    one = {**proj, key: [{**it, "mute": False, "solo": False, "at": 0.0}], "length": None, "track_mix": None}
     one.pop("sequence", None) if key == "pieces" else None
     lay_f = compose.layout({**one, "pieces": [{**it, "at": 0.0}]} if key == "pieces" else one, d / "cache")
     lay_n = compose.layout({**one, "pieces": [{**it, "at": 0.0, "fix": None}]} if key == "pieces" else one, d / "cache" / "prefix")
@@ -615,7 +778,20 @@ def install_routes() -> None:
         except ValueError as e:
             return ok({"error": str(e)})
         return JSONResponse({"project": _read(d / "project.json"), "layout": last_layout(name),
-                             "takes": takes(name), "job": _jobs.get(name)})
+                             "takes": takes(name), "clips": clips(name), "jobs": jobs(name),
+                             "saved": saved(name)})
+
+    async def version_post(request: Request):
+        b = await request.json()
+        return await thread(lambda: save_version(b.get("name", ""), b.get("project") or {}))
+
+    async def revert_post(request: Request):
+        b = await request.json()
+        return await thread(lambda: revert(b.get("name", "")))
+
+    async def freeze_post(request: Request):
+        b = await request.json()
+        return await thread(lambda: freeze(b.get("name", ""), b.get("take", ""), (b.get("label") or None)))
 
     async def save_post(request: Request):
         b = await request.json()
@@ -660,7 +836,7 @@ def install_routes() -> None:
         return ok(r)
 
     def status_get(name: str):
-        return JSONResponse(_jobs.get(name) or {"running": False})
+        return JSONResponse({"jobs": jobs(name)})
 
     async def promote_post(request: Request):
         b = await request.json()
@@ -752,6 +928,9 @@ def install_routes() -> None:
         app.add_api_route("/sa3/app", app_page, methods=["GET"])
         app.add_api_route("/sa3/composer/convert", convert_post, methods=["POST"])
         app.add_api_route("/sa3/composer/take_remove", take_remove_post, methods=["POST"])
+        app.add_api_route("/sa3/composer/freeze", freeze_post, methods=["POST"])
+        app.add_api_route("/sa3/composer/version", version_post, methods=["POST"])
+        app.add_api_route("/sa3/composer/revert", revert_post, methods=["POST"])
         app.add_api_route("/sa3/composer/piece", piece_get, methods=["GET"])
         app.add_api_route("/sa3/composer/fit", fit_get, methods=["GET"])
         app.add_api_route("/sa3/composer/fitall", fitall_post, methods=["POST"])

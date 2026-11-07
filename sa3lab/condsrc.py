@@ -37,9 +37,13 @@ stored anchor becomes `{"bank": <render id>, "i": k, "sha": …}` (condmix resol
 `tokens`); takes of takes chain naturally, each take holding its own copy. ~80 KB per stored
 anchor (fp16, compressed; measured: a 2-anchor take = 158 KB; a take usually has 2-5).
 
+**Muted anchors** (`"mute": true`, the Composer's "Mute conditioning"): the unconditional input,
+zeros for all 257 cross-attention tokens, as CFG dropout trained it; see `muted` below.
+
 Resolution falls back to the trash: a side file (`.cond.npz`, `.conds.npz`) whose render was
 trashed is read from `<folder>/deleted/` (library.delete_render moves both along), so trashing a
-source never breaks a take or a project that used it.
+source never breaks a take or a project that used it. A render whose file is gone altogether
+resolves to a Composer project's ⌘S deep copy (`vaulted`, composer/vault.py) when one exists.
 
 Traps: a bank tensor is fixed to the DiT it was rendered on (as every anarchy bag is); a plain
 prompt is re-encoded for whichever DiT renders. Content dedupe (`key`) merges a bank anchor with
@@ -63,14 +67,42 @@ BAG_EXT = ".cond.npz"
 FPS = 44100 / 4096
 _cache: dict = {}
 _banks: dict = {}                    # condmix: id(cond) → (cond, anchors, curves, [np bags]) of recent renders
+VAULT = ".vault"                     # outputs/composer/<project>/.vault/<render id>: composer/vault.py's ⌘S copies
 
 
 # ── files ────────────────────────────────────────────────────────────────────────────────────
+def vaulted(rid) -> Path | None:
+    """A render id whose file is gone → a Composer project's ⌘S deep copy of it (composer/vault.py)."""
+    rid = str(rid).lstrip("/")
+    try:
+        for d in sorted((OUTPUTS / "composer").iterdir()):
+            q = d / VAULT / rid
+            if q.is_file() and OUTPUTS in q.resolve().parents:
+                return q
+    except OSError:
+        pass
+    return None
+
+
+def unvault(path) -> str | None:
+    """A vault copy's path → the render id it stands for (None for any other path)."""
+    try:
+        parts = Path(path).resolve().relative_to(OUTPUTS).parts
+    except (ValueError, OSError):
+        return None
+    return "/".join(parts[3:]) if len(parts) > 3 and parts[0] == "composer" and parts[2] == VAULT else None
+
+
 def _audio(rid_or_path) -> Path | None:
-    """A render id (path under outputs/) or path → its resolved audio path (may be gone)."""
+    """A render id (path under outputs/) or path → its resolved audio path (may be gone; a gone file
+    with a ⌘S vault copy → the copy, whose side files sit beside it)."""
     p = Path(str(rid_or_path))
     p = (p if p.is_absolute() else OUTPUTS / str(rid_or_path).lstrip("/")).resolve()
-    return p if OUTPUTS in p.parents else None
+    if OUTPUTS not in p.parents:
+        return None
+    if not p.exists():
+        return vaulted(p.relative_to(OUTPUTS)) or p
+    return p
 
 
 def side(rid_or_path, ext: str) -> Path | None:
@@ -119,6 +151,28 @@ def plain_prompt(a: dict) -> bool:
             and not str(a["prompt"]).strip().lower().startswith("anarchy:"))
 
 
+# ── muted anchors ────────────────────────────────────────────────────────────────────────────
+# `"mute": true` on any anchor = SA3's unconditional input: all 257 cross-attention tokens zero
+# (the 256 content tokens AND the duration token), exactly what training's 10 % CFG dropout fed
+# the DiT (dit.py `cfg_dropout_prob`, `zeros_like(cross_attn_cond)`; the AdaLN duration stays).
+# The rest of the dict is what it was before muting, kept so it can be unmuted; `{"mute": true}`
+# alone = "this piece's / project's own conditioning, muted". Never stored in a bank (index -1:
+# the descriptor is self-describing), never loaded as tokens, never merged with its unmuted self.
+SOURCE_KEYS = ("id", "npz", "prompt", "bank", "sha")
+
+
+def muted(a) -> bool:
+    return isinstance(a, dict) and bool(a.get("mute"))
+
+
+def unmuted(a: dict) -> dict:
+    return {k: v for k, v in a.items() if k != "mute"}
+
+
+def has_source(a) -> bool:
+    return isinstance(a, dict) and any(k in a for k in SOURCE_KEYS)
+
+
 # ── the bank ─────────────────────────────────────────────────────────────────────────────────
 def read_bank(p) -> dict | None:
     q = side(p, BANK_EXT)
@@ -143,7 +197,7 @@ def write_bank(audio, anchors: list, curves: list, bags: list) -> Path | None:
     audio = Path(audio)
     rows, rsha, index, shas = [], {}, [], []
     for a, b in zip(anchors, bags):
-        if b is None or plain_prompt(a):
+        if b is None or plain_prompt(a) or muted(a):
             index.append(-1)
             shas.append(key(a))
             continue
@@ -184,7 +238,7 @@ def _backfill(p: Path, cond: dict) -> dict | None:
         bags = []
         for a in cond["anchors"]:
             try:
-                bags.append(None if "prompt" in a or a.get("splice") else tokens(a))
+                bags.append(None if "prompt" in a or a.get("splice") or muted(a) else tokens(a))
             except Exception:  # noqa: BLE001  (a source that is gone stays a descriptor)
                 bags.append(None)
         if any(x is not None for x in bags):
@@ -213,7 +267,7 @@ def of_render(path) -> dict:
         curves += [[[0.0, 1.0 if not curves and k == 0 else 0.0]] for k in range(len(curves), len(anchors))]
         if b:
             rid = rid_of(p)
-            anchors = [a if (i < 0 or plain_prompt(a)) else {"bank": rid, "i": k, "sha": b["sha"][k]}
+            anchors = [a if (i < 0 or plain_prompt(a) or muted(a)) else {"bank": rid, "i": k, "sha": b["sha"][k]}
                        for k, (a, i) in enumerate(zip(anchors, b["index"]))]
         return {"kind": "multi", "anchors": anchors, "curves": curves[:len(anchors)]}
     if g.get("composite"):
@@ -280,7 +334,11 @@ def dominant(path, s0=None, s1=None) -> dict | None:
 def expand(a: dict | None, _depth: int = 0) -> dict | None:
     """An anchor naming a render as ONE conditioning, made concrete: `{"id": rid}` of a multi
     render → its dominant anchor, of a text render → its prompt; an anarchy render (or anything
-    else) is returned as is. Extra keys (splice) ride along for a bag."""
+    else) is returned as is. Extra keys (splice) ride along for a bag. A muted anchor expands
+    what it mutes and stays muted."""
+    if muted(a) and _depth <= 4:
+        r = unmuted(a)
+        return {**(expand(r, _depth + 1) if has_source(r) else r), "mute": True}
     if not isinstance(a, dict) or "id" not in a or _depth > 4 or side(a["id"], BAG_EXT):
         return a
     s = of_render(a["id"])
@@ -292,7 +350,10 @@ def expand(a: dict | None, _depth: int = 0) -> dict | None:
 
 def tokens(a: dict) -> np.ndarray:
     """A file-backed anchor's (256, 768) float16 tensor (bank row, or an anarchy `.cond.npz` by
-    id or path). Prompts are encoded by condmix (MLX), not here."""
+    id or path). Prompts are encoded by condmix (MLX), not here; a muted anchor has none (its
+    conditioning is zeros, made by condmix)."""
+    if muted(a):
+        raise ValueError("a muted anchor has no stored tokens (it conditions on zeros)")
     if "bank" in a:
         b = read_bank(a["bank"])
         if b is None:
@@ -306,6 +367,8 @@ def tokens(a: dict) -> np.ndarray:
     else:
         q = Path(str(a["npz"]))
         q = (q if q.is_absolute() else OUTPUTS / q).resolve()
+        if OUTPUTS in q.parents and not q.is_file():
+            q = vaulted(q.relative_to(OUTPUTS)) or q
         q = q if AI_AUDIO.resolve() in q.parents and q.is_file() else None
     if q is None:
         raise ValueError(f"no conditioning file for {a}")
@@ -317,6 +380,8 @@ def tokens(a: dict) -> np.ndarray:
 
 def key(a: dict) -> str:
     """Dedupe key: the content hash for a bank anchor or a bag that loads; the JSON otherwise."""
+    if muted(a):                                   # its own key: never merges with its unmuted self
+        return "mute:" + key(unmuted(a))
     if a.get("sha") and not a.get("splice"):
         return a["sha"]
     if not a.get("splice") and ("id" in a or "npz" in a):
@@ -329,6 +394,9 @@ def key(a: dict) -> str:
 
 def label(a: dict) -> str:
     """A short readable name: the prompt, the render's file name, or a bank anchor's stored label."""
+    if muted(a):
+        r = unmuted(a)
+        return "muted (no conditioning)" + (f" · was {label(r)}" if has_source(r) else "")
     if "prompt" in a:
         return str(a["prompt"])
     if "bank" in a:

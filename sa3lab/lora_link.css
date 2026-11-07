@@ -1,0 +1,21 @@
+/* lora_link.js: the kit LoRA stack replaces upstream's LoRA slot widgets on screen; the widgets stay
+   mounted (hidden) because they carry the values /generate reads (loras.py). */
+#sa3-lora-data { display: none !important; }
+.gr-group:has(.sa3-lora-file), button.sa3-lora-add { display: none !important; }
+.block.sa3-lora-kitblk { background: none !important; border: none !important; box-shadow: none !important; padding: 0 !important; min-height: 0 !important; }
+.block.sa3-lora-kitblk .html-container { padding: 0 !important; }
+/* gradio's Tailwind form reset (.gradio-container-X select / [type=number] / button: white background, square
+   corners, .5rem .75rem padding, 1rem font) outranks the kit's single-class rules, so the stack came out
+   white with clipped numbers here while the Composer (no gradio) looked right. Re-assert the kit values. */
+.gradio-container .ui-lora .ui-input { height: 28px; padding: 0 8px; border-radius: var(--r-s); border: 1px solid var(--line-2);
+  background-color: #0d0d12; color: var(--text); line-height: normal; box-shadow: none; appearance: auto; }
+.gradio-container .ui-lora .ui-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(155, 140, 255, 0.15); }
+.gradio-container .ui-lora select.ui-input { background-image: none; padding-right: 4px; font: 12px var(--mono); }
+.gradio-container .ui-lora .ui-input.num { width: 52px; font-size: 12px !important; }   /* studio.css forces 13px on every number input */
+.gradio-container .ui-lora .ui-btn { height: 28px; padding: 0 10px; margin: 0; font: 13px/1.4 var(--font); font-weight: 400;
+  border: 1px solid var(--line-2); border-radius: var(--r-s); background: var(--panel-2); color: var(--text); }
+.gradio-container .ui-lora .ui-btn.small { height: 22px; padding: 0 7px; font-size: 12px; }
+.gradio-container .ui-lora .ui-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.gradio-container .ui-lora .ui-btn.ghost:hover { background: var(--panel-3); color: var(--text); }
+.gradio-container .ui-lora .add { border-style: dashed; background: none; color: var(--muted); }
+.gradio-container .ui-lora .add:hover { color: var(--text); border-color: var(--accent); }

@@ -4,7 +4,19 @@
 //
 //   const cl = new CurveLane(tl, {onCommit(K, before), onSeek(t), focus(),
 //                                 magnets: () => [t, …], end: () => T, mode: "span" | "point",
-//                                 brushFromHeight: false, closeEnds: false})
+//                                 closeEnds: false,
+//                                 fmtU: (u) => "0.50", what: "strength", detents: [0, .25, .5, .75, 1], grid: SPL,
+//                                 stepped: true, color: (u) => css | null, bodies: true, keepZero: false, prune: true, edges: true})
+// The options after closeEnds make it a generic automation curve (the Composer's track volume):
+// fmtU labels a value, `what` names it in tooltips, detents are the values a drag catches, grid the
+// time snap, stepped: false draws a smooth line (not per latent frame), color a solid line colour,
+// bodies: false turns off "drag inside a plateau" (a click under the line then adds a point),
+// keepZero keeps a curve that sits at 0 everywhere, prune: false keeps points on a flat stretch (curve.js norm),
+// edges: false treats two keys at one time as two plain points (both drawn, grabbed, moved on their own; a
+// drag pulls them apart) instead of a hard edge whose lower key hides under the top one.
+// paint(g, r, tl, {alpha, points, line, smooth}): points / line false = draw only the other half (a page
+// can clip the line to where it applies and still show every point); smooth draws the line eased
+// between keys (curve.js at(K, t, true)), for a non-stepped curve.
 //   lane = {…, pointer: (k, e, p) => cl.pointer(k, e, p), draw: (g, r, t) => cl.paint(g, r, t)}
 //
 // Gestures, DAW-automation style (Xander: clicks must never sprout points):
@@ -12,9 +24,10 @@
 //                         is drawn and grabbed, and its hidden partner moves with it, so edges stay edges
 //   drag a line           that segment up / down (a plateau's top: its strength)
 //   drag inside a plateau move it sideways (⌥: duplicate)
-//   drag on empty space   draw a plateau (at `brush`, or at the height you pressed: brushFromHeight)
+//   drag on empty space   draw a plateau at `brush` (1 = full regenerate unless setStrength changed it)
 //   click on empty space  deselect + seek (point mode: add a point there, the studio editor's Points)
 //   double-click          on a point: delete it; anywhere else: add a point at the cursor
+//   right-click           (page menu) delSpan(t): drop the two keys around t (spanAt(t) says if there are)
 // key(ev): ⌫ deletes the selection, ←/→ moves it one latent frame (⇧: 1 s), ↑/↓ its strength by 0.05.
 // Times snap to the latent grid and magnet to keys + the page's magnets, strengths to quarters;
 // ⇧ while dragging = free. closeEnds keeps the curve at 0 before its first and after its last key
@@ -31,7 +44,9 @@ const R_KEY = 10, R_SEG = 6, DRAG = 5;               // grab radii + the drag th
 export class CurveLane {
   constructor(tl, o = {}) {
     this.tl = tl;
-    this.o = { mode: "span", brushFromHeight: false, closeEnds: false, magnets: () => [], end: () => tl.length, ...o };
+    this.o = { mode: "span", closeEnds: false, magnets: () => [], end: () => tl.length, fmtU: f2, what: "strength",
+      detents: [0, 0.25, 0.5, 0.75, 1], grid: C.SPL, stepped: true, color: null, bodies: true, keepZero: false, prune: true, edges: true, ...o };
+    this.fu = (u) => this.o.fmtU(u);
     this.K = []; this.brush = 1; this.mode = this.o.mode; this.sel = null; this.drag = null; this.label = null; this.hot = null;
   }
   get T() { return Math.max(1e-3, this.o.end()); }
@@ -44,7 +59,7 @@ export class CurveLane {
       if (K[K.length - 1][1] > 0) K = [...K, [K[K.length - 1][0], 0]];
     }
     const sel = this.selKey() ? this.selKey().slice() : null;
-    this.K = C.norm(K);
+    this.K = C.norm(K, { keepZero: this.o.keepZero, prune: this.o.prune });
     if (sel) { const j = this.K.findIndex((k) => k[0] === C.r3(sel[0]) && k[1] === C.r4(sel[1])); this.sel = j >= 0 ? { kind: "k", j } : null; }
     if (this.o.onCommit) this.o.onCommit(this.K.map((k) => k.slice()), before);
     this.tl.redraw();
@@ -56,12 +71,12 @@ export class CurveLane {
     const spp = (this.tl.v1 - this.tl.v0) / Math.max(1, this.tl.W);
     let best = null, bd = 7 * spp;
     for (const v of m) { const d = Math.abs(v - t); if (v >= 0 && d < bd) { bd = d; best = v; } }
-    return best != null ? best : Math.round(t / C.SPL) * C.SPL;
+    return best != null ? best : Math.round(t / this.o.grid) * this.o.grid;
   }
   snapU(u, free, h) {
     if (free) return C.clamp(u, 0, 1);
     const tol = 6 / Math.max(1, h);
-    for (const v of [0, 0.25, 0.5, 0.75, 1, this.brush]) if (Math.abs(u - v) < tol) return v;
+    for (const v of [...this.o.detents, this.brush]) if (Math.abs(u - v) < tol) return v;
     return C.clamp(Math.round(u * 100) / 100, 0, 1);
   }
   // ── selection ──
@@ -69,11 +84,13 @@ export class CurveLane {
   selKey() { return this.sel && this.sel.kind === "k" ? this.K[this.sel.j] || null : null; }
   group(j) {                                         // j plus its hard-edge partners (keys at the same time)
     let a = j, b = j;
+    if (!this.o.edges) return [a, b];
     while (a > 0 && Math.abs(this.K[a - 1][0] - this.K[j][0]) < 1e-6) a--;
     while (b + 1 < this.K.length && Math.abs(this.K[b + 1][0] - this.K[j][0]) < 1e-6) b++;
     return [a, b];
   }
   hidden(j) {                                        // the 0-corner under a hard edge: not drawn, not grabbed
+    if (!this.o.edges) return false;
     const [a, b] = this.group(j);
     return b > a && this.K[j][1] < Math.max(...this.K.slice(a, b + 1).map((k) => k[1]));
   }
@@ -92,10 +109,30 @@ export class CurveLane {
     this.sel = null; this.commit(before);
     return true;
   }
-  moveKey(j, t) {                                    // key j (and its edge partners) to time t, between its neighbours
-    const [a, b] = this.group(j);
-    const lo = a > 0 ? this.K[a - 1][0] : 0, hi = b + 1 < this.K.length ? this.K[b + 1][0] : this.T;
-    t = C.clamp(t, lo, hi);
+  spanAt(t) {                                        // the stretch under t between two drawn keys: a plateau or a slope
+    const b = C.boxes(this.K).find((x) => t > x.a && t < x.b);
+    if (b) return { box: b, a: b.a, b: b.b };
+    let i = -1, j = -1;
+    this.K.forEach((k, n) => { if (!this.hidden(n) && k[0] <= t) i = n; });
+    j = this.K.findIndex((k, n) => !this.hidden(n) && k[0] > t);
+    if (i < 0 || j < 0 || (this.K[i][1] <= 0 && this.K[j][1] <= 0)) return null;
+    return { i, j, a: this.K[i][0], b: this.K[j][0] };
+  }
+  delSpan(t) {                                       // right-click → Delete: drop the two keys around t
+    const s = this.spanAt(t);
+    if (!s) return false;
+    const before = this.ser();
+    if (s.box) this.K = C.heal(this.K, s.a, s.b);    // a plateau: as ⌫ on it (its edges go, neighbours stay)
+    else this.K = this.K.filter((k, n) => n !== s.i && n !== s.j);
+    this.sel = null; this.hot = null; this.commit(before);
+    return true;
+  }
+  moveKey(j, t, free = false) {                      // key j (and its edge partners) to time t, strictly between its neighbours:
+    // landing on a neighbour's time would fuse the two into a hard edge, hiding the lower key for good
+    // (it snaps there: neighbour times are magnets). Keep a grid step clear (⇧: 1 ms, what norm's r3 keeps)
+    const [a, b] = this.group(j), gap = free ? 0.001 : Math.max(0.001, this.o.grid);
+    const lo = a > 0 ? this.K[a - 1][0] + gap : 0, hi = b + 1 < this.K.length ? this.K[b + 1][0] - gap : this.T;
+    t = lo <= hi ? C.clamp(t, lo, hi) : (lo + hi) / 2;
     for (let i = a; i <= b; i++) this.K[i][0] = t;
   }
   nudge(dt) {
@@ -159,6 +196,7 @@ export class CurveLane {
     return best;
   }
   hitBody(p) {                                       // inside a plateau's fill
+    if (!this.o.bodies) return null;
     return C.boxes(this.K).find((b) => p.px > this.tl.x(b.a) && p.px < this.tl.x(b.b) && p.py > this.ky(p.rect, b.u) + R_SEG) || null;
   }
   target(p) {
@@ -179,10 +217,10 @@ export class CurveLane {
       this.hot = tg.kind === "key" ? { j: tg.j } : tg.kind === "seg" ? { i: tg.i } : tg.kind === "body" ? { b: tg.b.a } : null;
       this.tl.cv.style.cursor = { key: "grab", seg: "ns-resize", body: "ew-resize", empty: "crosshair" }[tg.kind];
       this.tl.cv.title = {
-        key: `${f2(this.K[tg.j] ? this.K[tg.j][1] : 0)} at ${fmt(this.K[tg.j] ? this.K[tg.j][0] : 0)}: drag to move · double-click or ⌫ deletes`,
-        seg: "drag up / down: strength of this stretch",
+        key: `${this.fu(this.K[tg.j] ? this.K[tg.j][1] : 0)} at ${fmt(this.K[tg.j] ? this.K[tg.j][0] : 0)}: drag to move · double-click or ⌫ deletes`,
+        seg: `drag up / down: ${this.o.what} of this stretch`,
         body: "drag: move this span sideways (⌥: duplicate)",
-        empty: this.mode === "point" ? "click: add a point · drag: draw a span" : "drag: draw a span (height = strength) · double-click: add a point · click: move the playhead",
+        empty: this.mode === "point" ? "click: add a point (and drag it) · ⇧: no snapping" : "drag: draw a span · double-click: add a point · click: move the playhead",
       }[tg.kind];
       if (JSON.stringify(this.hot) !== was) this.tl.redraw();
       return;
@@ -212,7 +250,7 @@ export class CurveLane {
         this.sel = { kind: "k", j: this.K.findIndex((k) => k[0] === t && k[1] === u) };
         this.drag = { ...d0, mode: "key", j: this.sel.j, moved: true };
       } else {
-        const u = this.o.brushFromHeight ? Math.max(0.05, this.snapU(p.v, free, h)) : this.brush;
+        const u = this.brush;
         this.drag = { ...d0, mode: "new", u, base: this.K.map((k) => k.slice()), ts: this.snapT(p.t, [], free) };
       }
       this.tl.redraw();
@@ -227,18 +265,18 @@ export class CurveLane {
         const t = this.snapT(p.t, [], free), a = Math.min(d.ts, t), b = Math.max(d.ts, t);
         this.K = b - a >= C.SPL ? C.setRange(d.base, a, b, d.u) : d.base.map((k) => k.slice());
         this.sel = b - a >= C.SPL ? { kind: "p", a: C.r3(a) } : null;
-        this.label = `${f2(d.u)} · ${fmt(a)} – ${fmt(b)}`;
+        this.label = `${this.fu(d.u)} · ${fmt(a)} – ${fmt(b)}`;
       } else if (d.mode === "key") {
         const k = this.K[d.j];
         if (!k) return;
-        this.moveKey(d.j, this.snapT(p.t, [k[0]], free));
+        this.moveKey(d.j, this.snapT(p.t, [k[0]], free), free);
         k[1] = this.snapU(p.v, free, h);
-        this.label = `${f2(k[1])} at ${fmt(k[0])}`;
+        this.label = `${this.fu(k[1])} at ${fmt(k[0])}`;
       } else if (d.mode === "seg") {
         const dv = p.v - d.v0, a = this.K[d.i], b = this.K[d.i + 1];
         if (d.u0 === d.u1) a[1] = b[1] = this.snapU(d.u0 + dv, free, h);
         else { a[1] = C.clamp(d.u0 + dv, 0, 1); b[1] = C.clamp(d.u1 + dv, 0, 1); }
-        this.label = d.u0 === d.u1 ? f2(a[1]) : `${f2(a[1])} → ${f2(b[1])}`;
+        this.label = d.u0 === d.u1 ? this.fu(a[1]) : `${this.fu(a[1])} → ${this.fu(b[1])}`;
       } else if (d.mode === "move") {
         const { b, base } = d, w = b.b - b.a;
         let s = C.clamp(b.a + (p.t - d.t0), 0, this.T - w);
@@ -263,20 +301,16 @@ export class CurveLane {
     }
   }
   // ── painting: the curve per latent frame (exactly what the sampler gets), the points, the hover ──
-  paint(g, r, tl, { alpha = 0.22 } = {}) {
+  paint(g, r, tl, { alpha = 0.22, points = true, line = true, smooth = false } = {}) {   // points / line: false = draw only the other
     if (!this.K.length) return;
     const x0 = tl.x(0), T = this.T, n = Math.ceil(T / C.SPL);
-    const grad = g.createLinearGradient(0, r.y + r.h, 0, r.y);
-    grad.addColorStop(0, C.ucol(0)); grad.addColorStop(0.5, C.ucol(0.5)); grad.addColorStop(1, C.ucol(1));
-    const f0 = Math.max(0, Math.floor(tl.v0 / C.SPL) - 1), f1 = Math.min(n, Math.ceil(tl.v1 / C.SPL) + 1);
-    g.beginPath(); g.moveTo(Math.max(x0, tl.x(f0 * C.SPL)), r.y + r.h);
-    for (let f = f0; f < f1; f++) {
-      const u = C.at(this.K, (f + 0.5) * C.SPL), y = this.ky(r, u);
-      g.lineTo(tl.x(f * C.SPL), y); g.lineTo(tl.x(Math.min(T, (f + 1) * C.SPL)), y);
+    let grad = this.o.color;
+    if (!grad) {
+      grad = g.createLinearGradient(0, r.y + r.h, 0, r.y);
+      grad.addColorStop(0, C.ucol(0)); grad.addColorStop(0.5, C.ucol(0.5)); grad.addColorStop(1, C.ucol(1));
     }
-    g.lineTo(tl.x(Math.min(T, f1 * C.SPL)), r.y + r.h); g.closePath();
-    g.globalAlpha = alpha; g.fillStyle = grad; g.fill(); g.globalAlpha = 1;
-    g.strokeStyle = grad; g.lineWidth = 1.5; g.stroke();
+    if (line) this.paintLine(g, r, tl, grad, alpha, x0, T, n, smooth);
+    if (!points) return;
     const hot = this.drag ? null : this.hot, sb = this.selBox();
     const seg = (i, col, w) => {                     // highlight one segment
       const a = this.K[i], b = this.K[i + 1];
@@ -284,6 +318,38 @@ export class CurveLane {
       g.strokeStyle = col; g.lineWidth = w;
       g.beginPath(); g.moveTo(tl.x(a[0]), this.ky(r, a[1])); g.lineTo(tl.x(b[0]), this.ky(r, b[1])); g.stroke();
     };
+    this.paintMarks(g, r, tl, hot, sb, seg);
+  }
+  path(g, r, tl, x0, T, smooth) {                    // the line through the keys, flat past both ends (eased between keys when smooth)
+    g.lineTo(x0, this.ky(r, this.K[0][1]));
+    this.K.forEach((k, i) => {
+      const a = this.K[i - 1];
+      if (smooth && a && k[0] > a[0]) for (let s = 1; s < 16; s++) { const f = s / 16; g.lineTo(tl.x(a[0] + f * (k[0] - a[0])), this.ky(r, a[1] + C.ease(f) * (k[1] - a[1]))); }
+      g.lineTo(tl.x(k[0]), this.ky(r, k[1]));
+    });
+    g.lineTo(tl.x(T), this.ky(r, this.K[this.K.length - 1][1]));
+  }
+  paintLine(g, r, tl, grad, alpha, x0, T, n, smooth) {
+    g.beginPath();
+    if (this.o.stepped) {                            // per latent frame: exactly what the sampler gets
+      const f0 = Math.max(0, Math.floor(tl.v0 / C.SPL) - 1), f1 = Math.min(n, Math.ceil(tl.v1 / C.SPL) + 1);
+      g.moveTo(Math.max(x0, tl.x(f0 * C.SPL)), r.y + r.h);
+      for (let f = f0; f < f1; f++) {
+        const u = C.at(this.K, (f + 0.5) * C.SPL), y = this.ky(r, u);
+        g.lineTo(tl.x(f * C.SPL), y); g.lineTo(tl.x(Math.min(T, (f + 1) * C.SPL)), y);
+      }
+      g.lineTo(tl.x(Math.min(T, f1 * C.SPL)), r.y + r.h);
+    } else {                                         // a smooth line through the keys, flat past both ends
+      g.moveTo(x0, r.y + r.h); this.path(g, r, tl, x0, T, smooth); g.lineTo(tl.x(T), r.y + r.h);
+    }
+    g.closePath();
+    g.globalAlpha = alpha; g.fillStyle = grad; g.fill(); g.globalAlpha = 1;
+    if (!this.o.stepped) {                           // the line alone (not the fill's sides and floor)
+      g.beginPath(); g.moveTo(x0, this.ky(r, this.K[0][1])); this.path(g, r, tl, x0, T, smooth);
+    }
+    g.strokeStyle = grad; g.lineWidth = 1.5; g.stroke();
+  }
+  paintMarks(g, r, tl, hot, sb, seg) {
     if (sb) seg(sb.i, "#fff", 2.5);
     if (hot && hot.i != null) seg(hot.i, "rgba(255,255,255,0.75)", 3);
     if (hot && hot.b != null) {
@@ -294,7 +360,7 @@ export class CurveLane {
       if (this.hidden(j)) return;
       const x = tl.x(k[0]), y = this.ky(r, k[1]);
       const on = this.sel && this.sel.kind === "k" && this.sel.j === j, hv = hot && hot.j === j;
-      g.fillStyle = C.ucol(k[1]); g.strokeStyle = on ? "#fff" : hv ? "rgba(255,255,255,0.8)" : "rgba(9,9,13,0.9)"; g.lineWidth = on || hv ? 2 : 1;
+      g.fillStyle = this.o.color || C.ucol(k[1]); g.strokeStyle = on ? "#fff" : hv ? "rgba(255,255,255,0.8)" : "rgba(9,9,13,0.9)"; g.lineWidth = on || hv ? 2 : 1;
       g.beginPath(); g.arc(x, y, on || hv ? 5.5 : 4, 0, 7); g.fill(); g.stroke();
     });
     if (this.label) {

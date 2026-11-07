@@ -18,6 +18,7 @@ The module docstrings are the manual; this is the map.
 |---|---|
 | `sa3lab/composer/compose.py` | project.json → layout (measure, align, fix, place) → mix → reference WAV + segments box; strength keys, conditioning curves, windows past 380 s, section renders, server-side job submission, splice export |
 | `sa3lab/composer/server.py` | every `/sa3/composer/*` route (list in its docstring), takes listing, promote, keep / trash a take, imports, project-shape conversion |
+| `sa3lab/composer/vault.py` | the ⌘S deep copy: every outside file the saved project reads, APFS-cloned into `.vault/` on a background thread; read side `condsrc.vaulted` |
 | `sa3lab/composer/fit.py` | mismatch badges per piece / seam / overlap and the recommended fix chain ("Fit all") |
 | `sa3lab/composer/page/composer.js` | the editor (tracks, Rewrite lane, Conditioning lane, take lanes, inspectors, Fit panel) |
 | `sa3lab/composer/page/library.html` + `ui/browser.js` | the Library page: grid, filters, PCA map + k-means, lasso; also the composer's side panel |
@@ -33,7 +34,8 @@ The module docstrings are the manual; this is the map.
 
 Project folder `outputs/composer/<name>/`: `project.json` (autosaved), the last build (`ref.wav`,
 `box.*.json`, `project.resolved.json`), `takes/` (studio sidecars with `gen.composite`; trashed ones in
-`takes/deleted/`), `jobs/<stamp>/` (each batch's frozen project), `cache/`, `imports/`, `exports/`.
+`takes/deleted/`), `jobs/<stamp>/` (each batch's frozen project), `cache/`, `imports/`, `exports/`, `saved.json` (last ⌘S),
+`.vault/` (⌘S deep copy of every outside source, at its render id: vault.py).
 
 ## Design record
 
@@ -52,9 +54,17 @@ The code cites these section numbers as `spec N.N`.
 - Text conditioning is a cross-attended bag of 257 tokens with no positions; AdaLN gets only the
   duration. Per-frame conditioning is not native, hence `condmix.py`.
 - **Kept ≠ original audio.** Kept frames are exact latents, but the take is decoded by SAME-L, so a
-  kept piece comes back as the codec's reconstruction next to new neighbours. Inaudible for SA3 renders,
-  audible for imports and heavy DSP; the splice export pastes the fixed piece audio back in the
-  sample domain over kept zones.
+  kept piece comes back as the codec's reconstruction next to new neighbours (measured: waveform
+  correlation .74–.86 and −3 to −10 dB above 16 kHz per pass, so it **compounds** over promote rounds).
+  Two fixes. (1) Every inpaint render (studio included) gets the reference's own audio pasted over
+  its kept frames before it is saved (`segments.paste_kept`, a 150 ms raised-cosine crossfade inside
+  each kept edge, `splice_weights`; marked `gen.segments.paste`). (2) The take file is still an MP3,
+  so a take used as a piece (promoted base, lifted clip) reads `compose.take_source`: the reference
+  it was rendered on, rebuilt recursively from its frozen job, spliced over its kept frames. A kept
+  stretch is then always the audio that first produced it, plus one MP3 encode, never more. It
+  falls back to the raw take when the rebuilt reference's sha256 differs from the take's record
+  (a source changed, or a take rendered on an older base), and for window takes. Promote also
+  zeroes the master gain, which the base already carries (the limiter stays).
 - **The library is mostly free-time anarchy renders** (about half have no usable beat, almost none have
   a text prompt). So beat features apply only above beat confidence 0.3 (`compose.BEAT_CONF`: above it
   82–92 % of readings land on an integer BPM, below 0.2 it is chance), and the text-prompt levers
@@ -105,12 +115,77 @@ default between "sound" and "prompt" mode is for the 0g blind triplets to decide
   rubberband-stretched to it, cut to start on their own beat and to whole beats, and snapped to the grid,
   so the grid runs unbroken from t = 0. Beatless and `align: false` pieces (a promoted take) are never
   stretched. Bars: manual ± 1-beat nudge only, no auto-downbeat.
+- **Length** is a minimum (Extend, a promoted take's length): the timeline runs to the later of it and
+  the last clip's end, on both sides (`compose.layout`, the page's `projLength`), so a clip placed past
+  it is never cut out of the reference the page shows whole.
 - **Strength.** Kept = every piece's span minus a seam at uncovered edges; uncovered time = 1; the
-  Rewrite lane (one curve, 0 keep … 1 regenerate) overrides wherever it is above 0.
+  Rewrite lane (one curve, 0 keep … 1 regenerate) overrides wherever it is above 0. **Two copies of
+  this rule:** the page recomputes it on every paint (`composer.js` `autoStrength`, and `joins` for
+  the crossfades: mirrors of `compose.strength_keys` / `transitions`) so the noise overlay, the auto
+  band and the noise preview follow an edit at once; the build's `layout.keys` lagged a whole build
+  (decode + mix + conditioning). Change one, change the other.
 - **Takes** land as lanes under the tracks on the same time axis. **Promote** makes a take the base: one
   piece over the whole timeline, the old pieces kept as greyed history, the take's own recorded
   anchors as its conditioning. A take can be **kept** (starred, off the lanes, back on unstar) or
   **trashed** (the studio's trash: score 0, moved to `takes/deleted/`, kept as a negative row).
+- **Kept takes: the timeline never reads a take directly.** A stretch dragged off a take lane onto a
+  track (the page's `liftTake`), a take dropped from the library, and a promoted base all read the
+  take's frozen copy in the project's `clips/` (`server.freeze`): audio + `.conds.npz` bank
+  hardlinked (free while the take exists; the data survives trashing or `rm` of the take anywhere),
+  sidecar copied without labels plus a `clip` block. The whole take is frozen, not the stretch, so a
+  clip can still be trimmed outward; `base_take` remembers which lane was promoted. Rejected: guarding
+  deletion (the Library and studio can trash a take the composer can't see) and copying only the
+  stretch (no outward trims, extra disk). Lifted clips are `align: false`: a take already sits on the grid.
+- **Dropping a take back in place.** A vertical drag carries the whole take; a carried take snaps to
+  where it belongs (within 2 bars of that or of its render time); a selected stretch behaves the same.
+  "Where it belongs" is `composer.js` `liftHome`: each take lists the clips it was rendered from and
+  where they sat (`server.takes` → `pieces`, from `gen.composite.pieces`); the clip that covered most
+  of the stretch is found among today's clips (same id, source still covering that moment) and the
+  stretch follows it, so it lines up with that clip even after it moved in time or to another track;
+  no match (a generated gap, a deleted clip) → the render time. Only when it is dropped **on the clips
+  it came from** (a track holding one of those clips under the aligned span) does it **replace** that span on every
+  track (`composer.js` `cutSpan`: trims, splits, the base included), because a take is the whole mix
+  there: layering it would double every track under it. Dropped in time on any other track (an empty
+  one, or the "+ Track" lane under the tracks = a new track) it is layered and the originals stay, so
+  a take can sit next to its sources for A/B. Off its home (or ⇧) it is a plain layered clip.
+- **Take lanes scroll, no limit.** Every take is a lane (`scroll: true`): the timeline kit stacks
+  scroll lanes in a bottom region capped at ~42% of the canvas that scrolls vertically (wheel over it;
+  `tl.revealLane` on ↑ ↓), and paints only the visible ones, so hundreds of takes cost nothing.
+- **Lane heights are the viewer's, not the project's.** A lane's bottom edge in the label column
+  drags its height (kit: `onResize` + `rgroup`; tracks resize as one group, takes as one, Rewrite and
+  Conditioning alone), kept in the page's localStorage prefs (`prefs.lh`); double-click = default.
+  Until the tracks get a height they flex to fill; once every non-scroll lane is fixed (tracks sized,
+  Reference hidden) the take region fills whatever is left instead of sitting at its ~42% cap.
+- **Track mix** (`track_mix[k]`, the track gutter's M + fader) is applied in `compose.strip` /
+  `active_items`, not only in the monitor: a muted track = every clip on it muted (beats solo), its
+  gain adds to each clip's strip gain, so the reference, the conditioning pull (mixed RMS) and Fit's
+  masking all hear it. Promote starts a fresh `track_mix` (the take has it baked in).
+  `track_mix[k].env` is the track's **volume automation**: curve.js keys, gain = sin(π/2 · u) (`compose.env_gain`
+  / the page's `envGain`, keep them equal). Equal-power on purpose: two tracks whose curves mirror
+  each other (u and 1 − u, linear or smooth) sum to constant power, so a crossfade drawn as an X keeps
+  the level steady (the earlier u² law dipped ~9 dB at the crossing; u 0.5 is now −3 dB, not −12). It is multiplied onto each of the track's pieces after its strip
+  (handles included, so on top of the crossfades), in the reference and per voice in the monitor
+  (`mixer.js` `env`). Interpolation is per clip (`env_shape`: linear | "smooth" cosine ease), because
+  the curve is applied clip by clip anyway; the line draws each clip's stretch in its own mode. It is the Rewrite lane's `CurveLane` sitting on the track lane through the
+  timeline's `claim` hook: the curve gets only gestures on its points and lines, so clips stay
+  draggable with no mode switch. Entry is right-click → Add volume keypoint (a click-to-add mode was
+  rejected: it would steal clip drags).
+- **Two saved states.** `project.json` is autosaved on every edit (working state, crash-safe);
+  ⌘S writes `saved.json`, the one version Xander chose to keep (overwritten each ⌘S), which the header
+  chip compares against and Revert restores (undoable). ⌘S is caught in the capture phase so text
+  fields don't fall through to Chrome's "Save page as". ⌘S also queues `vault.py`: every file outside
+  the project folder that the saved project names is cloned into `.vault/` (copy-on-write, so free on
+  disk and instant; unchanged files skipped by size + mtime; pruned to the last ⌘S), never blocking
+  the page or the project lock. Hardlinks were not used: a clone is a truly independent copy.
+- **Split** (right-click a clip): two pieces with identical settings, no fade at the cut; strength_keys
+  treats a same-source contiguous edge as no edge, so a split adds no seam.
+- **Crossfades at back-to-back joins** (`compose.transitions`, the page's ⟷ handles): centred on the
+  join, built from source audio *past* each clip's cut (handles), so the timeline geometry (`at`, `dur`)
+  never moves; the clip's cached audio carries `pre` / `post` seconds outside it and every consumer
+  that places audio must offset by `pre` (`compose.mix`, the monitor's `syncMixer`). Fit measures with
+  `layout(xfades=False)`. A crossfaded join drops its seam (the user chose how it sounds); a hard cut
+  (`len 0`) keeps it, so "let SA3 blend it" = pick Hard cut. A split is never a transition (it would
+  only add an equal-power +3 dB bump over identical audio).
 - **Submission is server-side**: a thread in the studio process with a loopback `gradio_client`,
   because gradio drops a client's waiting jobs when its connection closes, so jobs sent from the page
   would die with the tab. Each batch freezes its project in `jobs/<stamp>/`, so editing during a render
@@ -140,6 +215,24 @@ Each piece contributes an **anchor** (its source conditioning: an anarchy bag or
 curve: 1 over its own span, crossfading across gaps, shared by loudness × `pull` over overlaps,
 normalised per frame. The Conditioning lane adds explicit keypoints (crossfade between them; a hard cut is
 opt-in). An anchor is the 256 content tokens only; duration is always the project's.
+After the last keypoint (or the last clip, in auto) its anchor holds for any length: `key_curves`
+fills to the layout's end and `frame_strength` holds flat past the last keyframe.
+The lane is edited only through explicit gestures: a click seeks (never adds a keypoint; the timeline
+ignores non-primary buttons, so a right-click is only ever the menu). Right-click edits the prompt or
+swaps the anchor (a library render via the Browser in a modal, or a typed prompt) on whatever *owns*
+that moment: in Keypoints mode the **block** under the cursor (a run of consecutive keypoints with one
+anchor, all rewritten together so a block never splits into two colours), else each clip there as its
+`anchor` override, else the project's one anchor; it also adds keypoints and sets fade presets. A
+fade between two blocks has a ⟷ handle: dragging it moves both keypoints around the fade's centre
+(`withFade`), the only control of *how gradual* a change is (the curve stays cosine). Keypoint curves
+are resolved in the page with `key_curves`' rule so drags redraw live; source names are not drawn on the
+lane (they overlapped), only in the 0.7 s hover tooltip (`tipAt`, ui/timeline.js) and the menu. Auto mode never turns itself into keypoints
+behind your back; only an explicit act does: "Edit as keypoints", or **inserting** a source (drag across
+the lane, or right-click a gap between clips → `insertCond`). An insert holds the new anchor at weight 1
+over the span and puts the old one back a fade (one bar, ≤ ¼ span) outside each edge, dropping keypoints
+inside that window, so nothing outside it changes. The pickers resolve after an `await`
+and write by index (`keys[i]`, `pieces[pi]`): safe only because the modal's backdrop blocks every
+timeline edit while it is open (`composer.js` `condMenu`).
 
 | Mechanism | Verdict |
 |---|---|
@@ -147,6 +240,19 @@ opt-in). An anchor is the 256 content tokens only; duration is always the projec
 | M3 velocity blend over N full passes | built as the in-distribution reference; N× cost |
 | M2 joint attention with log-weight bias | rejected: a high-logit anchor dominates whatever the weights say, and Medium's differential cross-attention doesn't give a convex mix |
 | M4 token-wise lerp of the sequences | rejected: bags are unordered, position-wise lerp is arbitrary |
+
+**Mute conditioning** (lane right-click "Mute conditioning", the inspector's Mute box, or "No conditioning"
+when inserting over a span / gap): `"mute": true` on an anchor makes that stretch SA3's *unconditional*
+input, all 257 cross-attention tokens zero, duration token included. That is exactly what training's 10 %
+CFG dropout showed the DiT (`dit.py` `cfg_dropout_prob`; the MLX CLI's uncond branch is the same
+`zeros_like`). An empty prompt is *not* that: T5Gemma("") + the learned padding vector is a real, rarely
+seen conditioning. The flag sits on the anchor and keeps the source it mutes, so Unmute is exact;
+`{"mute": true}` alone mutes a clip's / the project's own conditioning (a muted take keeps all its anchors
+and curves, each flagged). condmix shares one zero slot for every muted anchor in a job; condsrc never
+banks or dedupes a muted anchor with its unmuted self. Traps: under CFG ≠ 1 a muted stretch has
+cond = uncond, so CFG does nothing there (checked: cfg 1 vs 3, max latent Δ 0.006; Render warns when a
+CFG ≠ 1 render or section is muted throughout, `composer.js` `fullyMuted`); self-attention still
+carries the neighbours' style into it, which is the point (the audio context steers).
 
 In the acceptance test, m1, m3, a hard cut and no interpolation gave near-identical gaps within a seed
 (the noise seed dominates), which is why the cheaper M1 is the default.
@@ -163,6 +269,11 @@ time-stretch (`bench/latent_stretch.py`) against rubberband; 0h tests splicing T
 - **Don't fork the render path.** Pages submit jobs to the studio; nothing else samples. Two MLX
   processes on the M2 means two models in RAM. Embedding work that needs SAME-L runs in the studio
   process while the queue is idle.
+- **One queue: the studio's.** Each Render click is a batch with its own frozen snapshot and
+  thread, and every take goes into gradio's queue at once, so batches stack and the shared Queue
+  modal (`ui/queue.js`) reorders / deletes / skips them like Generate clicks. A take deleted there
+  completes with no output: `compose._run_jobs` logs it "removed", not a failure. The page shows a
+  batch's lanes before its save + build finishes (an optimistic placeholder, replaced by the server's).
 - **Agent test renders go to `teststudio.py`** on another port, never :7860 (Xander's history).
 - **Bare filenames only resolve in the active folder** (`library._audio_path`); use render ids.
 - **The reference must be exactly the project length**: the studio's Length follows the reference
@@ -177,9 +288,12 @@ time-stretch (`bench/latent_stretch.py`) against rubberband; 0h tests splicing T
 - **Upstream's a2a σ is not a strength scale**; use the strength curve.
 - **LoRAs are per project.** A piece rendered with another LoRA loses that sound in its soft regions;
   the Fit panel flags it.
-- **Trashing a take that is the base or a clip on the tracks is refused**: the build reads its audio
-  and `library.resolve_id` never resolves into `deleted/`. Conditioning *does* resolve from the trash
-  (`condsrc.side`), so a trashed anchor keeps working.
+- **A trashed or deleted source resolves to its ⌘S copy** (`compose.piece_audio_path`,
+  `condsrc._audio` → `condsrc.vaulted`, any project's `.vault/`), so a *starred render* used as a
+  piece and later trashed breaks the build only if the project was never ⌘S-saved since the piece was
+  added. `library.resolve_id` refuses `deleted/` and hidden folders, so studio routes (a piece's
+  spectrogram by id) still miss a trashed source. Takes are safe regardless (kept takes, above).
+  Conditioning also resolves from the trash (`condsrc.side`).
 - **Different ports = different localStorage**, which is why everything lives on one origin.
 - **Imported audio is copyrighted material**: imports, their cuts and caches stay under `outputs/`
   (gitignored), never shared.

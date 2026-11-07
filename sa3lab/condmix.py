@@ -21,6 +21,13 @@ This module adds it without touching upstream files, the way segments.py patches
   encoded with T5Gemma (+ the DiT's padding vector) exactly as upstream does, so an `anarchy: …`
   spec works too. File-backed anchors resolve through condsrc.tokens, which falls back to the
   trash (`deleted/`). The 257th token (duration) is always the job's own length.
+- Any anchor may carry `"mute": true` (the Composer's Mute conditioning): it is then SA3's
+  *unconditional* input, all 257 tokens zero, duration token included, which is exactly what
+  training's 10 % CFG dropout showed the DiT (dit.py `cfg_dropout_prob`; the MLX CLI's uncond
+  branch is the same `zeros_like(cross)`). The rest of the dict only records what was muted.
+  Every muted anchor of a job shares one zero slot (their weights add), so muting costs at most
+  one extra cross-attention pass. A muted stretch under CFG ≠ 1 has cond = uncond, so CFG is a
+  no-op there: the frames follow the audio context (inpaint keep / a2a init) and the noise.
 - Curves use segments' keyframe rule (linear between keys, flat outside, repeated t = a jump),
   sampled at each latent frame's centre, then normalised to sum 1 per frame (a frame where every
   curve is 0 goes to anchor 0). A hard cut is two keys at the same t.
@@ -69,7 +76,7 @@ def parse(cond) -> dict | None:
     if not isinstance(cond, dict):
         return None
     anchors = [a for a in cond.get("anchors") or [] if isinstance(a, dict)
-               and any(k in a for k in ("npz", "id", "prompt", "bank"))]
+               and any(k in a for k in ("npz", "id", "prompt", "bank", "mute"))]
     if not anchors:
         return None
     curves = list(cond.get("curves") or [])
@@ -109,6 +116,8 @@ def anchor_tokens(a: dict, dit: str):
     with the trash as fallback)."""
     import condsrc
     mx = _up.mx
+    if condsrc.muted(a):                                  # SA3's unconditional input (CFG dropout)
+        return mx.zeros((1, 256, 768), dtype=mx.float16)
     a = condsrc.expand(a)
     if "prompt" in a:
         e, m = _up.get_t5().encode([str(a["prompt"])], max_len=256)
@@ -153,8 +162,18 @@ def _runtime(cond: dict, T: int):
         condsrc.remember(cond, p["anchors"], p["curves"],
                          [np.array(t[0].astype(_up.mx.float16)) for t in hit["anchors"]])
     if T not in hit["w"]:
-        hit["w"][T] = weights(hit["p"]["curves"], T, _up.SAMPLE_RATE / _up.SAMPLES_PER_LATENT)
+        W = weights(hit["p"]["curves"], T, _up.SAMPLE_RATE / _up.SAMPLES_PER_LATENT)
+        mut = [i for i, a in enumerate(hit["p"]["anchors"]) if condsrc_muted(a)]
+        for i in mut[1:]:                                 # every muted anchor shares one zero slot
+            W[mut[0]] += W[i]
+            W[i] = 0.0
+        hit["w"][T] = W
     return hit["p"], hit["anchors"], hit["w"][T]
+
+
+def condsrc_muted(a) -> bool:
+    import condsrc
+    return condsrc.muted(a)
 
 
 def _active_cond():
@@ -164,11 +183,13 @@ def _active_cond():
 
 
 # ── the DiT hook ──────────────────────────────────────────────────────────────────────────
-def _raw(anchor, cross):
+def _raw(anchor, cross, mute: bool = False):
     """Anchor tokens + this job's duration token, batch-matched to `cross` (row 1 under CFG =
-    the uncond / negative branch, kept as is)."""
+    the uncond / negative branch, kept as is). Muted: the duration token is zero too (the whole
+    cross-attention input zero, as CFG dropout trained it)."""
     mx = _up.mx
-    row = mx.concatenate([anchor.astype(cross.dtype), cross[0:1, 256:]], axis=1)
+    dur = cross[0:1, 256:]
+    row = mx.concatenate([anchor.astype(cross.dtype), mx.zeros_like(dur) if mute else dur], axis=1)
     return row if cross.shape[0] == 1 else mx.concatenate([row, cross[1:]], axis=0)
 
 
@@ -188,9 +209,10 @@ def _patch(mod) -> None:
         T = x.shape[-1]
         p, anchors, W = _runtime(cond, T)
         live = [i for i in range(len(anchors)) if W[i].max() > 0]
+        mute = [condsrc_muted(p["anchors"][i]) for i in range(len(anchors))]
         if len(live) == 1 and W[live[0]].min() >= 1.0:          # one anchor everywhere: exact
-            return dit_call(self, x, t, _raw(anchors[live[0]], cross), gcond, local_add_cond)
-        raws = [_raw(anchors[i], cross) for i in live]
+            return dit_call(self, x, t, _raw(anchors[live[0]], cross, mute[live[0]]), gcond, local_add_cond)
+        raws = [_raw(anchors[i], cross, mute[i]) for i in live]
         if p["mode"] == "m3":
             out = None
             for i, r in zip(live, raws):

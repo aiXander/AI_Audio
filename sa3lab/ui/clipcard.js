@@ -1,11 +1,13 @@
-// SA3 UI kit: a render card: dadaspec with highlight bands + a label strip (score, star, play / stop,
-// Add). One card = one render, or one moment of it (`range`: the card shows that stretch, e.g. a
+// SA3 UI kit: a render card: a header (title + play / stop on the right), dadaspec with highlight
+// bands, and an action strip (range, ★ Highlight, Add) shown only while it has something in it. One card = one render, or one moment of it (`range`: the card shows that stretch, e.g. a
 // highlight). The play button reads ■ while this card plays (player.subscribe).
 //
-//   new ClipCard(host, row, {range, onAdd(row, [s0, s1]), onChanged(), known})
+//   new ClipCard(host, row, {range, onAdd(row, [s0, s1]), addLabel, onChanged(), known})
+// addLabel renames the Add button (the Composer's conditioning picker: "Use").
 //
 // Gestures on the dadaspec (spec 3.1): click seeks + plays, drag selects a range (→ "Add" /
 // "Highlight" buttons appear), click a highlight band → its menu (loop, edit, add, remove). The card is draggable (MIME application/x-sa3-piece: {id, s0, s1}) onto the composer.
+// Right-click anywhere on the card → "Show in Finder" (reveal.js; the dadaspec's highlight bands keep their own menu).
 // `row` = a /sa3/composer/starred row: {id, prompt, seconds, bpm, conf, score, starred?, hl, hl_an, folder}.
 
 import * as api from "./api.js";
@@ -14,6 +16,7 @@ import { SpecView, load as loadSpec, drawCrop } from "./dadaspec.js";
 import { menu } from "./menu.js";
 import { openHighlight } from "./highlight.js";
 import { toast } from "./shell.js";
+import { install as installReveal } from "./reveal.js";
 
 export const MIME = "application/x-sa3-piece";
 const fmt = (t) => (t == null ? "–" : t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, "0")}` : `${t.toFixed(1)} s`);
@@ -21,24 +24,26 @@ export const short = (s, n = 60) => { s = (s || "").replace(/^anarchy:\s*@?/, ""
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 export class ClipCard {
-  constructor(host, row, { range = null, onAdd = null, onChanged = null, known = [], compact = false } = {}) {
+  constructor(host, row, { range = null, onAdd = null, addLabel = "Add", onChanged = null, known = [], compact = false } = {}) {
     this.row = row; this.o = { range, onAdd, onChanged, known, compact };
     const el = (this.el = document.createElement("div"));
     el.className = "ui-card" + (compact ? " compact" : "");
     el.draggable = true;
+    el.dataset.sa3Id = row.id;                     // right-click → Show in Finder (reveal.js)
+    installReveal();
     const bpm = row.bpm ? `<span class="ui-chip${row.conf >= 0.3 ? "" : " dim"}" title="beat confidence ${row.conf}">${(+row.bpm).toFixed(0)} BPM${row.conf >= 0.3 ? "" : " ?"}</span>` : "";
     const key = this.key();
-    el.innerHTML = `<div class="t" title="${esc(row.prompt || row.id)}">${esc(short(row.prompt || row.id, compact ? 46 : 70))}</div>
+    el.innerHTML = `<div class="hd"><div class="t" title="${esc(row.prompt || row.id)}">${esc(short(row.prompt || row.id, compact ? 46 : 70))}</div><button class="ui-btn small ghost pl" title="play">▶</button></div>
       <div class="meta">${range ? `<span class="ui-chip accent">${fmt(range[0])}–${fmt(range[1])}</span>` : ""}<span class="ui-chip dim">${esc(row.folder || "")}</span><span class="ui-chip dim">${fmt(row.seconds)}</span>${bpm}${key ? `<span class="ui-chip">${key}</span>` : ""}${row.score != null ? `<span class="ui-chip">${row.score}/10</span>` : ""}${(row.hl || []).length ? `<span class="ui-chip hl">${row.hl.length} ★</span>` : ""}${(row.loras || []).length ? '<span class="ui-chip dim">LoRA</span>' : ""}</div>
       <div class="sv"></div>
-      <div class="acts"><span class="r mono"></span><button class="ui-btn small ghost pl" title="play">▶</button><button class="ui-btn small ghost hlb" title="save the range as a highlight" hidden>★ Highlight</button>${onAdd ? '<button class="ui-btn small primary add" title="add to the timeline">Add</button>' : ""}</div>`;
+      <div class="acts"><span class="r mono"></span><button class="ui-btn small ghost hlb" title="save the range as a highlight" hidden>★ Highlight</button>${onAdd ? `<button class="ui-btn small primary add" title="${addLabel === "Add" ? "add to the timeline" : esc(addLabel)}">${esc(addLabel)}</button>` : ""}</div>`;
     host.appendChild(el);
     this.sel = range ? [...range] : null;
     const key2 = "card:" + row.id;
     const play = (t0, t1 = null, loop = false) => player.play({ key: key2, url: api.audioUrl(row.id), t0, t1, loop, onTime: (x) => this.sv.setPlayhead(x) })
       .catch((e) => toast("can't play: " + e.message, { error: true }));
     this.sv = new SpecView(el.querySelector(".sv"), {
-      url: api.specUrl(row.id), duration: row.seconds, height: compact ? 54 : 64, bands: row.hl || [],
+      url: api.specUrl(row.id), duration: row.seconds, height: compact ? 84 : 64, bands: row.hl || [],
       onRange: (rg) => { this.sel = rg; this.acts(); },
       onSeek: (t) => play(t, this.sel && t < this.sel[1] ? this.sel[1] : null),
       onBand: (b, e) => this.bandMenu(b, e, play),
@@ -70,6 +75,7 @@ export class ClipCard {
     const r = this.el.querySelector(".r");
     r.textContent = this.sel ? `${this.sel[0].toFixed(1)}–${this.sel[1].toFixed(1)} s` : "";
     this.el.querySelector(".hlb").hidden = !this.sel;
+    this.el.querySelector(".acts").hidden = !this.sel && !this.o.onAdd;   // an empty strip gives its height back to the dadaspec
     this.el.classList.toggle("picked", !!this.sel);
   }
   bandMenu(b, e, play) {

@@ -12,6 +12,8 @@ pieces cut from renders → one reference WAV + a segments box → takes rendere
      "model": {"dit": "medium", "decoder": "same-l", "steps": 8, "cfg": 1.0},
      "pieces": [{"id": <render id>, "src": [s0, s1], "at": t, "track": 0,
                  "align": true, "speed": 1.0, "mute": false, "solo": false, "fade": [0.01, 0.01],
+                 "xfade": {"len": 0.5, "shape": "eq" | "lin"},   # the crossfade into this clip (below)
+                 "env_shape": "smooth",                         # how its track's volume curve interpolates over it (default linear)
                  "mix": {mixdsp strip}, "fix": {"transpose": st, "formant": false, "gain": dB,
                          "eq": [low, mid, high dB], "width": k}, "pull": 1.0}],
      "sequence": [{"id": …, "src": [s0, s1]}, {"gap": 10}, …],   # the phase-0 / CLI shape (end to end)
@@ -19,6 +21,7 @@ pieces cut from renders → one reference WAV + a segments box → takes rendere
      "rewrite": [[t, u], …],                              # the Rewrite lane's strength curve
      "seam": 0.0, "seam_unit": "beats",                   # regenerated each side of a piece edge
      "master": {"gain": dB, "limit": true, "ceiling": -1.0},
+     "track_mix": [{"gain": dB, "mute": false, "env": [[t, u], …]}, null, …],   # per track (index = piece `track`)
      "cond": {"mode": "m1", "fade": "cos", "gap": "crossfade" | "global" | "keys",
               "keys": [{"t": s, "anchor": {"id"|"npz"|"prompt": …}, "cut": false}]},   # the Conditioning lane
      "anchor": {"id": …} | {"prompt": …},                 # the global anchor (default: the longest piece's)
@@ -26,11 +29,24 @@ pieces cut from renders → one reference WAV + a segments box → takes rendere
      "variants": [{"name": "m1"}, {"name": "m3", "mode": "m3"}, {"name": "cut", "fade": "cut"},
                   {"name": "single", "anchors": "first"}]}
 
+`length` is a minimum (Extend, a promoted take): the timeline runs to the later of it and the last
+clip's end, so a clip placed past it is never cut short.
+
 **Pieces** sit on tracks and may overlap (layering, spec 4.1); `sequence` lays pieces out end to
 end with `{"gap": s}` items (phase 0; the editor converts it to explicit pieces on open). A piece is
 a render id (path under outputs/, symlinks resolved) and a source range; id + the audio's sha256 go
 into every take's lineage. **Mute / solo** leave a piece out of what SA3 sees (its time becomes
-uncovered unless another piece covers it).
+uncovered unless another piece covers it). **Track mix** (`track_mix[k]`, the track gutter's M and
+fader): a muted track mutes every piece on it exactly like a piece mute (track mute beats solo), and
+its gain adds to each of its pieces' strip gain, so the reference (and the conditioning pull, which
+reads each piece's mixed RMS) gets it exactly as the live monitor plays it. `env` is the track's
+volume automation (the editor's V mode on a track): keys [[t, u], …] in timeline seconds, curve.js
+rules (linear between, flat outside, two keys at one t = a jump), gain = sin(π/2 · u): an
+equal-power law (u 1 = 0 dB, 0.5 = −3 dB, 0.33 = −6, 0.16 = −12, 0 = silence; `env_gain`, mirrored by
+the page's `envGain`), so two tracks whose curves mirror each other (u and 1 − u) always sum to the
+same power: a crossfade drawn as an X keeps the level constant, at any shape. Applied to each piece of the track
+after its strip, so on top of the clip crossfades. Each piece reads the curve with its own
+`env_shape`: linear between keys (default) or "smooth" (cosine ease, curve.js `ease`).
 
 **Per-piece chain, in render order** (spec 4.1 / 4.3): decode → *alignment* (tempo stretch +
 beat cut) → *fix chain* (the Fit panel's conform: transpose with rubberband pitch, gain, 3-band EQ,
@@ -53,6 +69,16 @@ project length (the studio's Length follows the reference: segments.locked_lengt
   A piece's own `speed` (the editor's ⌥-drag on a clip edge: 0.5 = half speed, twice as long)
   multiplies into that rubberband factor, for every piece; a beat piece is still cut to whole beats
   and snapped, so stretching it to twice its beats gives half-time on the grid.
+- **Crossfades** (`transitions`, the editor's ⟷ handles on a track): where a clip starts within
+  XF_TOL of where the previous clip on the same track ends, and both have source audio past that
+  edge (A after its cut, B before it), the two overlap by `len` seconds centred on the join: A
+  plays on for len/2 fading out, B starts len/2 early fading in (equal-power by default, `"lin"`
+  for phase-aligned material). The later clip's `xfade` sets it (default XF_DEFAULT; `len: 0` = a
+  hard cut), clamped to `max` = 2 × the shorter handle and to either clip's length. The handles
+  are decoded with the clip (same stretch + fix chain) into its cached audio, whose `pre` / `post`
+  seconds sit outside its nominal `at` / `dur` (the timeline geometry never changes). A split clip
+  (`continued`: same source, contiguous) is no transition. A crossfaded join keeps its audio: no
+  seam there (a hard cut keeps the seam).
 - **Strength** (`strength_keys`): kept = every active piece's span, minus `seam` (beats on a grid,
   else seconds) at each piece edge that is not covered by another layer running through it (a
   layer entering over a held bed keeps the bed); uncovered time = 1; `soft` regions = their u;
@@ -83,6 +109,11 @@ project length (the studio's Length follows the reference: segments.locked_lengt
   (`key_curves`: each keypoint = one anchor at weight 1, cosine crossfades between consecutive
   keypoints, a keypoint with `cut: true` is a hard switch). The keys land in the take's
   `gen.composite.cond_keys`, the resolved curves in its `gen.segments.cond`.
+- **Mute** (the lane's Mute conditioning): `"mute": true` on any anchor (a piece's `anchor`, a
+  keypoint's, the project's) = SA3's unconditional input over that stretch (zeros, as CFG dropout
+  trained it: condsrc / condmix), so only the audio context and the noise steer it. The rest of the
+  anchor stays so it unmutes exactly; `{"mute": true}` alone mutes a piece's (or the project's)
+  own conditioning, and a muted take keeps its curves (`piece_anchors`).
 - **Morph** (the 0f test bed: conditioning A → B over one render, no pieces): no pieces, a
   `length`, `"anchors": [{"id": …}, {"id": …}]` and `"morph": [t0, t1]`. The reference is
   silence at strength 1 everywhere, which samples exactly like plain text → audio.
@@ -106,7 +137,8 @@ the sample domain (the fixed piece audio instead of the codec's reconstruction),
 3 latent frames inside each kept edge.
 
 Traps: a take's kept frames are the codec's reconstruction of the pieces (exact latents, decoded
-next to new material), not the source audio. SA3 sees only the summed mix: a generated frame over
+next to new material), not the source audio; a take used as a piece therefore reads `take_source`
+(kept frames spliced back from its rebuilt reference) instead of its own decode. SA3 sees only the summed mix: a generated frame over
 an overlap regenerates every layer in it.
 """
 from __future__ import annotations
@@ -130,6 +162,7 @@ OUTPUTS = (AI_AUDIO / "outputs").resolve()
 sys.path.insert(0, str(SA3LAB))
 
 import condsrc  # noqa: E402
+import loras  # noqa: E402
 import mixdsp  # noqa: E402
 import tempo  # noqa: E402
 
@@ -138,6 +171,8 @@ SPL = 4096
 FPS = SR / SPL                       # latent frames per second (one frame = 92.9 ms)
 BEAT_CONF = 0.3                      # spec 1.1: tempo readings are trustworthy above this
 FADE = 0.01                          # default piece edge fades (s)
+XF_DEFAULT = 0.5                     # a back-to-back join's default crossfade (s)
+XF_TOL = 0.03                        # how close two clips' edges must be to count as back to back (s)
 PRE_ROLL = 0.02                      # a beat piece starts this long before its first beat (keeps the kick's attack)
 MARGIN = 2.0                         # extra source audio around a beat piece (stretch + snap room)
 MAX_LEN = 380.0                      # one Medium pass (spec 1)
@@ -308,6 +343,14 @@ def apply_fix(y: np.ndarray, fix: dict | None) -> np.ndarray:
     return y
 
 
+def _xcurve(n: int, shape: str, up: bool) -> np.ndarray:
+    """A crossfade's gain ramp over n samples: equal-power (sin / cos) or linear."""
+    x = np.linspace(0, 1, n, dtype=np.float32)
+    if shape == "lin":
+        return x if up else x[::-1].copy()
+    return (np.sin(x * np.pi / 2) if up else np.cos(x * np.pi / 2)).astype(np.float32)
+
+
 def _fades(y: np.ndarray, fade) -> np.ndarray:
     a, b = (fade if isinstance(fade, (list, tuple)) else (fade, fade)) if fade is not None else (FADE, FADE)
     fa, fb = int(max(0.0, float(a)) * SR), int(max(0.0, float(b)) * SR)
@@ -332,7 +375,10 @@ def load(path) -> dict:
 
 
 def piece_audio_path(rid: str) -> Path:
+    """A render id → its audio file; a gone file falls back to a project's ⌘S copy (vault.py)."""
     p = (OUTPUTS / rid).resolve()
+    if OUTPUTS in p.parents and not p.is_file():
+        p = condsrc.vaulted(p.relative_to(OUTPUTS)) or condsrc.vaulted(rid) or p
     if OUTPUTS not in p.parents or not p.is_file():
         raise SystemExit(f"no render with id {rid!r} under outputs/")
     return p
@@ -349,15 +395,24 @@ def _sidecar(p: Path) -> dict:
         return {}
 
 
+def track_mix(proj: dict | None, it: dict) -> dict:
+    """The mix of the track piece `it` sits on (`track_mix[k]`: {"gain": dB, "mute": bool}), {} if unset."""
+    tm = (proj or {}).get("track_mix") or []
+    k = int(it.get("track", 0) or 0)
+    x = tm[k] if 0 <= k < len(tm) else None
+    return x if isinstance(x, dict) else {}
+
+
 def active_items(proj: dict) -> tuple[list, list]:
-    """(items laid out, muted piece items). Solo wins: with any solo, only soloed pieces play."""
+    """(items laid out, muted piece items). Solo wins: with any solo, only soloed pieces play; a
+    muted track wins over solo (DAW-style)."""
     items = proj.get("sequence")
     if not items:
         items = sorted(proj.get("pieces") or [], key=lambda x: float(x.get("at", 0)))
-    solo = any(it.get("solo") for it in items if "id" in it)
+    solo = any(it.get("solo") for it in items if "id" in it and not track_mix(proj, it).get("mute"))
     keep, muted = [], []
     for it in items:
-        if "id" in it and (it.get("mute") or (solo and not it.get("solo"))):
+        if "id" in it and (it.get("mute") or track_mix(proj, it).get("mute") or (solo and not it.get("solo"))):
             muted.append(it)
             if proj.get("sequence"):                   # a muted piece in a sequence leaves its time as a gap
                 keep.append({"gap": float(it["src"][1]) - float(it["src"][0]), "_muted": True})
@@ -379,21 +434,29 @@ def _audio_key(pc: dict, it: dict, bpm, P) -> str:
          "fade": it.get("fade")}
     if _speed(it) != 1.0:                              # only when set: unstretched pieces keep their cache files
         k["speed"] = _speed(it)
+    if pc.get("lossless"):                             # a take read through take_source (not its raw decode)
+        k["ll"] = 1
     return hashlib.sha1(json.dumps(k, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def layout(proj: dict, cache_dir: Path | None = None) -> dict:
-    """Measure + place every active piece. Returns {"pieces", "gaps", "length", "bpm", "muted"};
-    each piece gets `audio` (2, n): aligned, fixed and faded, ready for its mix strip at `at`."""
+def layout(proj: dict, cache_dir: Path | None = None, xfades: bool = True) -> dict:
+    """Measure + place every active piece. Returns {"pieces", "gaps", "length", "bpm", "xfades", "muted"};
+    each piece gets `audio` (2, n): aligned, fixed and faded, ready for its mix strip at `at` − `pre`
+    (`xfades=False`: no crossfades, every piece's plain audio, e.g. fit.py's measurements)."""
     items, muted = active_items(proj)
     proj_align = proj.get("align", True)
     pieces, bpm = [], proj.get("bpm")
     for it in items:                                   # measure every piece's range first
         if "gap" in it:
             continue
-        rid = render_id(piece_audio_path(it["id"]))   # normalise (symlink → original)
+        src = piece_audio_path(it["id"])
+        rid = condsrc.unvault(src) or render_id(src)   # normalise (symlink → original; a ⌘S copy keeps its id)
         src = piece_audio_path(rid)
         s0, s1 = float(it["src"][0]), float(it["src"][1])
+        full = src_dur(src)
+        if full > 0 and s1 > full:                     # never past the audio (the page's trims stop there too)
+            s1 = round(full, 4)
+            s0 = min(s0, max(0.0, s1 - 0.05))
         align = it.get("align", proj_align)
         m = (s0 + s1) / 2                              # tempo needs ≥ 4 s: measure short ranges in context
         w0, w1 = (s0, s1) if s1 - s0 >= 8 else (max(0.0, m - 4), m + 4)
@@ -401,7 +464,7 @@ def layout(proj: dict, cache_dir: Path | None = None) -> dict:
         pc = {"id": rid, "sha256": sha256(src), "src": [s0, s1], "bpm": t["bpm"], "conf": t["conf"],
               "pi": next((k for k, x in enumerate(proj.get("sequence") or proj.get("pieces") or []) if x is it), None),
               "beat": bool(align and t["bpm"] and t["conf"] >= BEAT_CONF), "align": bool(align),
-              "_path": src, "_item": it}
+              "_path": src, "_item": it, "lossless": _take_plan(src) is not None}
         pieces.append(pc)
     if bpm is None:                                    # the editor never sets one: a live best-effort estimate
         bpm = tempo_consensus([(pc["bpm"], pc["conf"] * (pc["src"][1] - pc["src"][0]))
@@ -423,7 +486,7 @@ def layout(proj: dict, cache_dir: Path | None = None) -> dict:
                 b = fold(pc["bpm"], bpm)
                 k = bpm / b * sp                       # rubberband tempo factor (alignment × the piece's own speed)
                 m0 = min(MARGIN, s0)
-                y = decode(pc["_path"], s0 - m0, (s1 - s0) + m0 + MARGIN, tempo_k=k)
+                y = src_decode(pc["_path"], s0 - m0, (s1 - s0) + m0 + MARGIN, tempo_k=k)
                 ph = beat_phase(y, bpm)
                 want = m0 / k                          # where s0 landed after the stretch
                 start = max(0.0, ph + max(0, round((want - ph) / P)) * P - PRE_ROLL)   # beats land PRE_ROLL in
@@ -433,7 +496,7 @@ def layout(proj: dict, cache_dir: Path | None = None) -> dict:
                 info = {"stretch": round(k, 6), "phase": round(ph, 4), "beats": n,
                         "src_cut": [round(s0 - m0 + start * k, 4), round(s0 - m0 + (start + n * P) * k, 4)]}
             else:
-                y = decode(pc["_path"], s0, s1 - s0, tempo_k=sp)
+                y = src_decode(pc["_path"], s0, s1 - s0, tempo_k=sp)
             y = _fades(apply_fix(y, it.get("fix")), it.get("fade"))
             pc["audio"] = y
             pc.update(info)
@@ -468,14 +531,113 @@ def layout(proj: dict, cache_dir: Path | None = None) -> dict:
         pc["at_req"] = round(float(it.get("at", 0.0)), 4) if not seq else pc["at"]   # what the page asked for
         pc["dur"] = round(pc["audio"].shape[1] / SR, 4)
         pc["track"] = int(it.get("track", 0) or 0)
+        pc["pre"] = pc["post"] = 0.0
         cur = at + pc["dur"] if seq else max(cur, at + pc["dur"])
         out.append(pc)
-    length = float(proj.get("length") or cur)
+    xfades = transitions(out) if xfades and not seq else []
+    for x in xfades:                                   # the handles each crossfade needs, decoded with the clip
+        if x["len"] > 0:
+            a, b = x.pop("_a"), x.pop("_b")
+            a["post"], a["_xout"] = x["len"] / 2, x["shape"]
+            b["pre"], b["_xin"] = x["len"] / 2, x["shape"]
+        else:
+            x.pop("_a"); x.pop("_b")
+    for pc in out:
+        if pc["pre"] or pc["post"]:
+            _with_handles(pc, cache_dir)
+    # `length` only ever adds time (the editor's Extend, a promoted take's length): a clip placed past
+    # it still lands whole, exactly as the page draws it (composer.js projLength), never cut short
+    length = max(float(proj.get("length") or 0.0), cur)
     if not seq:
         gaps = uncovered(out, length)
-    return {"pieces": out, "gaps": gaps, "length": round(length, 4), "bpm": bpm,
+    return {"pieces": out, "gaps": gaps, "length": round(length, 4), "bpm": bpm, "xfades": xfades,
             "muted": [{"id": it["id"], "src": it["src"], "at": it.get("at"), "track": it.get("track", 0)}
                       for it in muted]}
+
+
+def _cut(pc: dict) -> list:
+    return pc.get("src_cut") or pc["src"]
+
+
+def continues(a: dict, b: dict) -> bool:
+    """b carries a's source on from where a stops (a split clip): same render, stretch and source time."""
+    return (a["id"] == b["id"] and abs(a.get("stretch", 1) - b.get("stretch", 1)) <= 1e-4
+            and abs(_cut(a)[1] - _cut(b)[0]) < 5e-3)
+
+
+def src_dur(path: Path) -> float:
+    """A piece source's full length in seconds (a take read through take_source: that audio's)."""
+    def f():
+        full = take_source(path)
+        if full is not None:
+            return full.shape[1] / SR
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True)
+        try:
+            return float(r.stdout.strip())
+        except ValueError:
+            return 0.0
+    return _cached("dur", path, fn=f)
+
+
+def transitions(pieces: list) -> list:
+    """Back-to-back joins on a track (see **Crossfades**): [{a, b (piece indexes), track, t, len, max,
+    shape, set}], plus the laid-out pieces as `_a` / `_b` for layout. A join with no source audio past
+    either edge has nothing to fade and is left out."""
+    out = []
+    for k in sorted({pc["track"] for pc in pieces}):
+        row = sorted((pc for pc in pieces if pc["track"] == k), key=lambda pc: pc["at"])
+        for a, b in zip(row[:-1], row[1:]):
+            if abs(a["at"] + a["dur"] - b["at"]) > XF_TOL or a.get("pi") is None or b.get("pi") is None or continues(a, b):
+                continue
+            tail = (src_dur(a["_path"]) - _cut(a)[1]) / float(a.get("stretch") or 1.0)
+            head = _cut(b)[0] / float(b.get("stretch") or 1.0)
+            mx = max(0.0, min(2 * tail, 2 * head, a["dur"], b["dur"]))
+            if mx < 0.02:
+                continue
+            want = b["_item"].get("xfade") or {}
+            ln = float(want.get("len", XF_DEFAULT))
+            ln = 0.0 if ln < 0.02 else min(ln, mx)
+            out.append({"a": a["pi"], "b": b["pi"], "track": k, "t": round(b["at"], 4), "len": round(ln, 4),
+                        "max": round(mx, 4), "shape": "lin" if want.get("shape") == "lin" else "eq",
+                        "set": "len" in want, "_a": a, "_b": b})
+    return out
+
+
+def _with_handles(pc: dict, cache_dir: Path | None) -> None:
+    """Replace a laid-out piece's audio with its crossfade version: `pre` / `post` seconds of its own
+    source each side (same stretch, fix chain), faded across the whole overlap (`_xin` / `_xout`
+    shapes); its plain edge fade stays on a side without one. Cached like the plain audio."""
+    it, pre, post = pc["_item"], pc["pre"], pc["post"]
+    pc["base_key"] = pc["audio_key"]
+    key = hashlib.sha1(json.dumps([pc["audio_key"], round(pre, 4), round(post, 4), pc.get("_xin"), pc.get("_xout")]).encode()).hexdigest()[:16]
+    hit = (cache_dir / f"{key}.wav") if cache_dir else None
+    pc["audio_key"] = key
+    if hit and hit.is_file():
+        pc["audio"] = read_wav(hit)
+        return
+    k = float(pc.get("stretch") or 1.0)
+    c0, c1 = _cut(pc)
+    a0 = max(0.0, c0 - pre * k)
+    lead = min(MARGIN, a0) if pc.get("beat") else 0.0   # as layout decodes it: a beat piece with lead-in, else from its start
+    y = src_decode(pc["_path"], a0 - lead, lead + (c1 - c0) + (pre + post) * k, tempo_k=k)
+    y = y[:, int(round(lead / k * SR)):]
+    n = int(round((pre + pc["dur"] + post) * SR))
+    y = np.pad(y[:, :n], ((0, 0), (0, max(0, n - y.shape[1]))))
+    f = it.get("fade")
+    fa, fb = f if isinstance(f, (list, tuple)) else ((FADE if f is None else f),) * 2
+    y = _fades(apply_fix(y, it.get("fix")), [0.0 if pre else fa, 0.0 if post else fb])
+    ni, no = int(round(2 * pre * SR)), int(round(2 * post * SR))
+    if ni > 1:
+        y[:, :ni] *= _xcurve(ni, pc.get("_xin") or "eq", True)
+    if no > 1:
+        y[:, n - no:] *= _xcurve(no, pc.get("_xout") or "eq", False)
+    pc["audio"] = y
+    if hit:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = hit.with_name(hit.stem + ".tmp.wav")
+        write_wav(tmp, y)
+        tmp.replace(hit)
 
 
 def first_beat(pc: dict, P: float | None) -> float | None:
@@ -510,8 +672,11 @@ def uncovered(pieces: list, L: float) -> list:
 
 
 # ── reference WAV: mix strip per piece, summed, master bus ─────────────────────────────────
-def strip(pc: dict) -> np.ndarray:
-    m = pc["_item"].get("mix") or {}
+def strip(pc: dict, proj: dict | None = None) -> np.ndarray:
+    m = dict(pc["_item"].get("mix") or {})
+    tg = float(track_mix(proj, pc["_item"]).get("gain") or 0.0)
+    if tg:                                             # the track's fader: on top of the piece's own gain
+        m["gain"] = round(float(m.get("gain") or 0.0) + tg, 4)
     k = ("strip", pc["audio_key"], json.dumps(m, sort_keys=True))
     if k not in _cache:
         if len(_cache) > 512:
@@ -520,16 +685,42 @@ def strip(pc: dict) -> np.ndarray:
     return _cache[k]
 
 
+def env_gain(env: list, t: np.ndarray, smooth: bool = False) -> np.ndarray:
+    """A track volume envelope (curve.js keys [[t, u], …]) → linear gain sin(π/2 · u) at times t
+    (equal-power: mirrored curves u / 1 − u on two tracks sum to constant power); smooth = a
+    cosine ease between keys (curve.js `ease`). Two keys at one time are a jump: the later one is
+    nudged a sample on so the times increase."""
+    ts, us = [], []
+    for k in env:
+        tk = float(k[0])
+        if ts and tk <= ts[-1]:
+            tk = ts[-1] + 1.0 / SR
+        ts.append(tk)
+        us.append(min(1.0, max(0.0, float(k[1]))))
+    if not smooth or len(ts) < 2:
+        return np.sin(np.pi / 2 * np.interp(t, ts, us)).astype(np.float32)
+    ts_, us_ = np.asarray(ts), np.asarray(us)
+    i = np.clip(np.searchsorted(ts_, t, side="right") - 1, 0, len(ts_) - 2)
+    f = np.clip((t - ts_[i]) / (ts_[i + 1] - ts_[i]), 0.0, 1.0)
+    u = us_[i] + (1 - np.cos(np.pi * f)) / 2 * (us_[i + 1] - us_[i])
+    return np.sin(np.pi / 2 * u).astype(np.float32)
+
+
 def mix(lay: dict, proj: dict | None = None) -> np.ndarray:
     n = int(round(lay["length"] * SR))
     ref = np.zeros((2, n), np.float32)
     for pc in lay["pieces"]:
-        y = strip(pc) if "_item" in pc else pc["audio"]
+        y = strip(pc, proj) if "_item" in pc else pc["audio"]
+        env = track_mix(proj, pc["_item"]).get("env") if "_item" in pc else None
+        if env and y.size:                             # the track's volume automation, over this piece's audio
+            y = y * env_gain(env, pc["at"] - pc.get("pre", 0.0) + np.arange(y.shape[1]) / SR,
+                             pc["_item"].get("env_shape") == "smooth")
         pc["rms"] = float(np.sqrt((y.astype(np.float64) ** 2).mean())) if y.size else 0.0
-        i0 = int(round(pc["at"] * SR))
+        i0 = int(round((pc["at"] - pc.get("pre", 0.0)) * SR))   # a crossfade's lead-in starts before `at`
+        j = max(0, -i0)
         i1 = min(n, i0 + y.shape[1])
-        if i1 > i0:
-            ref[:, i0:i1] += y[:, :i1 - i0]
+        if i1 > i0 + j:
+            ref[:, i0 + j:i1] += y[:, j:i1 - i0]
     return mixdsp.apply_master(ref, (proj or {}).get("master"))
 
 
@@ -540,7 +731,8 @@ def _seam(pc: dict, proj: dict, P) -> float:
 
 def strength_keys(lay: dict, proj: dict) -> list:
     """Piecewise-constant strength: pieces 0 (minus seams at uncovered-by-another-layer edges),
-    uncovered 1, soft / gen regions on top."""
+    uncovered 1, soft / gen regions on top. An edge where the same source carries on (a clip split
+    in two, halves untouched: same id + stretch, contiguous in time and source) is no seam."""
     L = lay["length"]
     P = 60.0 / lay["bpm"] if lay["bpm"] else None
     pcs = lay["pieces"]
@@ -548,11 +740,29 @@ def strength_keys(lay: dict, proj: dict) -> list:
 
     def spanned(t, me):                                # another layer runs through t
         return any(o is not me and o["at"] < t - 1e-3 and o["at"] + o["dur"] > t + 1e-3 for o in pcs)
+
+    def cut(o):
+        return o.get("src_cut") or o["src"]
+
+    xf = {(x["b"], True) for x in lay.get("xfades") or [] if x["len"] > 0} | \
+         {(x["a"], False) for x in lay.get("xfades") or [] if x["len"] > 0}
+
+    def continued(me, start):                          # a split (the same source carries on), or a crossfade
+        if (me.get("pi"), start) in xf:
+            return True
+        t = me["at"] if start else me["at"] + me["dur"]
+        for o in pcs:
+            if o is me or o["id"] != me["id"] or abs(o.get("stretch", 1) - me.get("stretch", 1)) > 1e-4:
+                continue
+            ot = o["at"] + o["dur"] if start else o["at"]
+            if abs(ot - t) < 2e-3 and abs(cut(o)[1 if start else 0] - cut(me)[0 if start else 1]) < 5e-3:
+                return True
+        return False
     for pc in pcs:
         s = _seam(pc, proj, P)
         a, b = pc["at"], pc["at"] + pc["dur"]
-        a2 = a + (s if a > 1e-6 and not spanned(a, pc) else 0.0)      # no seam at the project's edges
-        b2 = b - (s if b < L - 1e-6 and not spanned(b, pc) else 0.0)
+        a2 = a + (s if a > 1e-6 and not spanned(a, pc) and not continued(pc, True) else 0.0)   # no seam at the project's edges
+        b2 = b - (s if b < L - 1e-6 and not spanned(b, pc) and not continued(pc, False) else 0.0)
         if b2 > a2:
             kept.append((a2, b2))
     regs = [r for r in proj.get("regions") or [] if r.get("type") in ("soft", "gen")]
@@ -633,6 +843,9 @@ def anchor_of(pc: dict) -> dict:
     """A piece as ONE anchor: its override, else its source's dominant anchor over the range it
     uses (an anarchy bag, its prompt, or a take's most-weighted anchor: condsrc.dominant)."""
     ov = (pc.get("_item") or {}).get("anchor")
+    if condsrc.muted(ov) and not condsrc.has_source(ov):   # its own conditioning, muted
+        d = condsrc.dominant(pc["_path"], *src_range(pc))
+        return {**(d or {}), "mute": True}
     a = condsrc.expand(ov) if ov else condsrc.dominant(pc["_path"], *src_range(pc))
     if not a:
         raise SystemExit(f"piece {pc['id']} has no conditioning (an import?)")
@@ -643,8 +856,13 @@ def piece_anchors(pc: dict) -> list:
     """[(anchor, keys | None)]: the piece's source conditioning (condsrc.of_render). keys = the
     weight curve over the *source* timeline (a multi-anchor render's recorded curves: composer
     takes, takes of takes, Arranger sends), None = weight 1 throughout. [] for audio without
-    conditioning (imports). An override (`anchor` on the piece) is one anchor (condsrc.expand)."""
+    conditioning (imports). An override (`anchor` on the piece) is one anchor (condsrc.expand).
+    `anchor: {"mute": true}` mutes the piece's own conditioning: every source anchor, same curves,
+    each marked muted (condsrc.muted: zeros at render time), so unmuting restores it exactly."""
     ov = (pc.get("_item") or {}).get("anchor")
+    if condsrc.muted(ov) and not condsrc.has_source(ov):
+        s = condsrc.of_render(pc["_path"])
+        return [({**a, "mute": True}, k) for a, k in zip(s["anchors"], s["curves"])] or [({"mute": True}, None)]
     if ov:                                             # Xander's override (a prompt, another render, an npz)
         return [(condsrc.expand(ov), None)]
     s = condsrc.of_render(pc["_path"])
@@ -654,8 +872,14 @@ def piece_anchors(pc: dict) -> list:
 def global_anchor(lay: dict, proj: dict | None) -> dict:
     """The one anchor of a "global" project and the fallback for imports: `anchor` when set,
     else the longest piece's (anchor_of: a promoted base take gives its dominant anchor)."""
-    if (proj or {}).get("anchor"):
-        return condsrc.expand(proj["anchor"])
+    a = (proj or {}).get("anchor")
+    if a and not (condsrc.muted(a) and not condsrc.has_source(a)):
+        return condsrc.expand(a)
+    if a:                                              # {"mute": true}: the longest piece's, muted
+        try:
+            return {**global_anchor(lay, {}), "mute": True}
+        except SystemExit:
+            return {"mute": True}
     for pc in sorted(lay["pieces"], key=lambda pc: -pc["dur"]):
         try:
             return anchor_of(pc)
@@ -875,14 +1099,14 @@ def build(proj: dict, prune: bool = True) -> dict:
     tmp.replace(ref_path)
     keys = strength_keys(lay, proj)
     pieces = [{k: pc[k] for k in ("id", "pi", "sha256", "src", "at", "dur", "track", "stretch", "bpm", "conf", "beat",
-                                  "at_req", "align", "phase", "beats", "src_cut", "audio_key", "rms") if k in pc}
-              | {k: pc["_item"][k] for k in ("mix", "fix", "fade", "pull", "anchor", "speed") if pc["_item"].get(k) is not None}
+                                  "at_req", "align", "phase", "beats", "src_cut", "audio_key", "rms", "pre", "post") if k in pc}
+              | {k: pc["_item"][k] for k in ("mix", "fix", "fade", "pull", "anchor", "speed", "xfade", "env_shape") if pc["_item"].get(k) is not None}
               for pc in lay["pieces"]]
     regions = ([{"type": "gap", "t0": a, "t1": b} for a, b in lay["gaps"]]
                + [r for r in proj.get("regions") or []])
     lineage = {"project": proj["name"], "project_file": _rel(d / "project.json"), "length": lay["length"],
                "bpm": lay["bpm"], "pieces": pieces, "regions": regions, "rewrite": proj.get("rewrite") or None,
-               "muted": lay["muted"],
+               "muted": lay["muted"], "xfades": lay.get("xfades") or [],
                "seam": proj.get("seam", 0.0), "master": proj.get("master") or {},
                "cond_mode": (proj.get("cond") or {}).get("gap", "crossfade"),
                "cond_keys": (proj.get("cond") or {}).get("keys") if (proj.get("cond") or {}).get("gap") == "keys" else None,
@@ -896,7 +1120,7 @@ def build(proj: dict, prune: bool = True) -> dict:
     resolved = {k: v for k, v in proj.items() if not k.startswith("_")} | {"resolved": lineage}
     (d / "project.resolved.json").write_text(json.dumps(resolved, indent=1))
     if prune:
-        _prune(cache, {pc["audio_key"] for pc in lay["pieces"]})
+        _prune(cache, {pc[k] for pc in lay["pieces"] for k in ("audio_key", "base_key") if pc.get(k)})
     return {"ref": ref_path, "length": lay["length"], "boxes": boxes, "lineage": lineage, "keys": keys,
             "layout": lay}
 
@@ -909,37 +1133,111 @@ def _rel(p: Path) -> str:
 
 
 # ── splice export (spec 4.1) ────────────────────────────────────────────────────────────────
-def splice(take: Path, ref: Path, keys: list, out: Path, xf_frames: int = 3) -> Path:
-    """The take with its kept frames (strength 0) replaced by the reference audio, crossfaded over
-    `xf_frames` latent frames inside each kept edge. Both must be the same length (± a frame)."""
-    y, r = decode(take), decode(ref)
-    n = min(y.shape[1], r.shape[1])
-    y, r = y[:, :n], r[:, :n]
+def splice(take: Path, ref: Path, keys: list, out: Path) -> Path:
+    """The take with its kept frames (strength 0) replaced by the reference audio (`_splice`)."""
+    write_wav(out, _splice(decode(take), decode(ref), keys))
+    return out
+
+
+def _splice(y: np.ndarray, r: np.ndarray, keys: list) -> np.ndarray:
+    """y (a take) with its kept frames taken from r (its reference, same timeline), with the studio's
+    kept-audio paste crossfade (segments.splice_weights). Keeps y's length: a reference shorter than
+    the take (an Extend tail, a section past the end) is padded; those frames are regenerated anyway."""
+    import segments
+    n = y.shape[1]
+    r = r[:, :n] if r.shape[1] >= n else np.pad(r, ((0, 0), (0, n - r.shape[1])))
     T = int(math.ceil(n / SPL))
     u = _sample([(float(a), float(b)) for a, b in keys], (np.arange(T) + 0.5) / FPS) if keys else np.ones(T)
-    keep = (u <= 1e-6).astype(np.float64)
-    k = np.ones(xf_frames * 2 + 1) / (xf_frames * 2 + 1)        # soften inside kept stretches only
-    soft = np.minimum(keep, np.convolve(keep, k, "same"))
-    soft = np.where(keep > 0, np.clip((np.convolve(keep, np.ones(2 * xf_frames + 1), "same") - xf_frames)
-                                      / (xf_frames + 1), 0, 1), 0.0)
-    w = np.interp(np.arange(n) / SPL, np.arange(T) + 0.5, soft).astype(np.float32)
-    z = y * (1 - w) + r * w
-    write_wav(out, z)
-    return out
+    w = segments.splice_weights(u <= 1e-6, n, SPL)
+    return y * (1 - w) + r * w
+
+
+# ── lossless take sources: a take used as a piece keeps its kept frames' first audio ──────────
+def _take_plan(path: Path) -> dict | None:
+    """{comp, keys} for a composer take whose kept frames `take_source` can rebuild; None for any
+    other render, a window take (stitched from several jobs) or a take that kept nothing."""
+    def f():
+        g = _sidecar(Path(path)).get("gen") or {}
+        comp, keys = g.get("composite") or {}, (g.get("segments") or {}).get("strength") or []
+        if (not comp.get("project_file") or not comp.get("ref_sha256") or comp.get("window")
+                or comp.get("windows") or not keys or min(float(k[1]) for k in keys) > 1e-6):
+            return None
+        return {"comp": comp, "keys": keys}
+    return _cached("takeplan", path, fn=f)
+
+
+def take_source(path: Path) -> np.ndarray | None:
+    """A composer take's audio with its kept frames (strength 0) from the reference it was rendered
+    on, rebuilt from its frozen job (`_splice`). A take that becomes a piece (a promoted base, a
+    clip lifted from a take) reads this instead of its own decode, so a kept stretch stays the
+    audio that first produced it however many promote → inpaint rounds it survives: the rebuild
+    recurses (a base that is itself a take is rebuilt the same way), and a kept stretch never gets
+    another SAME-L round trip + MP3 encode. Regenerated and soft frames are the take's own decode.
+    None when it doesn't apply (`_take_plan`) or the rebuilt reference's sha256 isn't the one the
+    take recorded (a source render changed, or the take predates this: its reference was built
+    from takes as decoded) — then the piece uses the take as decoded, as before."""
+    plan = _take_plan(path)
+    if plan is None:
+        return None
+    return _cached("takesrc", path, fn=lambda: _take_source(Path(path), plan))
+
+
+def _take_source(path: Path, plan: dict) -> np.ndarray | None:
+    import os
+    import tempfile
+    comp = plan["comp"]
+    pf = OUTPUTS / comp["project_file"]
+    if not pf.is_file():
+        return None
+    try:
+        proj = load(pf)
+        pd = pf.parents[2] if pf.parent.parent.name == "jobs" else pf.parent   # <project>/jobs/<stamp>/
+        ref = mix(layout(proj, pd / "cache"), proj)
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            write_wav(Path(tmp), ref)
+            same = _sha256(Path(tmp)) == comp["ref_sha256"]
+        finally:
+            os.unlink(tmp)
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        print(f"[compose] {path.name}: its reference didn't rebuild ({e}); the piece uses the take as decoded",
+              file=sys.stderr)
+        return None
+    if not same:
+        print(f"[compose] {path.name}: the rebuilt reference differs from the one it was rendered on; "
+              "the piece uses the take as decoded", file=sys.stderr)
+        return None
+    if comp.get("section"):                            # a section take: its stretch of the reference
+        a, z = comp["section"]
+        ref = ref[:, int(round(float(a) * SR)):int(round(float(z) * SR))]
+    return _splice(decode(path), ref, plan["keys"])
+
+
+def src_decode(path: Path, t0: float = 0.0, dur: float | None = None, tempo_k: float = 1.0) -> np.ndarray:
+    """`decode` of a piece's source: a composer take reads `take_source` (its kept frames' first audio)."""
+    full = take_source(path)
+    if full is None:
+        return decode(path, t0, dur, tempo_k)
+    i0 = int(round(max(0.0, t0) * SR))
+    y = full[:, i0:] if dur is None else full[:, i0:i0 + int(round(dur * SR))]
+    if abs(tempo_k - 1.0) > 1e-6 and y.shape[1]:
+        y = mixdsp._ffmpeg(y, f"rubberband=tempo={tempo_k:.8f}:transients=crisp")
+    return np.ascontiguousarray(y)
 
 
 # ── server-side submit (gradio_client → the studio's own queue) ─────────────────────────────
 def generate_args(api_n: int, prompt: str, seconds: float, seed: int, model: dict, ref: str,
                   outdir: str, box: dict) -> list:
     """/generate's positional inputs (enqueue.py's order) + outdir's destination box + the
-    segments box; padded LoRA slots fill whatever the studio has in between."""
+    segments box; the project's LoRAs (model.loras, the kit LoRA stack's list) fill upstream's
+    3 slots (loras.to_slots), and padding fills whatever the studio has in between."""
     from gradio_client import handle_file
     steps = int(model.get("steps", 8))
     vals = [model.get("dit", "medium"), model.get("decoder", "same-l"), prompt, "", float(seconds), steps,
             str(seed), float(model.get("cfg", 1.0)), float(model.get("apg", 1.0)), 1.0, 0.92,
             None, handle_file(ref), 0, 0, [], "Save to MP3 (V0)"]
-    slots = [[None, "", 1.0, 1, 8]] * 3
-    vals += sum(slots, [])
+    vals += loras.to_slots(model.get("loras"), steps)
     vals += [outdir, json.dumps(box)]
     if len(vals) != api_n:
         raise SystemExit(f"/generate takes {api_n} inputs here, the harness builds {len(vals)}: "
@@ -976,6 +1274,11 @@ def _run_jobs(c, n_api, jobs, window, log):
             err = [x for x in r if isinstance(x, str) and "error:" in x]
             log(("FAIL " + tag + " " + err[0][:200]) if err else f"done {tag}")
             res[i] = r if not err else None
+        except KeyError as e:                     # deleted in the Queue modal: gradio completes it with no
+            if e.args != ("data",):               # output, and gradio_client's result["data"] raises
+                raise
+            log(f"removed {tag} (deleted from the queue)")
+            res[i] = None
         except Exception as e:  # noqa: BLE001  (one failed job must not drop the rest)
             log(f"FAIL {tag} {e}")
             res[i] = None
@@ -1027,9 +1330,14 @@ def submit_section(proj: dict, b: dict, url: str, outdir: str | None, window: in
     re-rendering the whole piece): the reference, strength keys and conditioning curves cut to it
     and shifted to start at 0, like one window of submit_windows without the chaining. SA3 sees only
     the section, so kept audio at its edges is its only context. The take is t1 - t0 long, on its
-    own timeline; `composite.section` = [t0, t1] places it back on the project's."""
+    own timeline; `composite.section` = [t0, t1] places it back on the project's.
+
+    A section may run past the timeline's end (an extension: the editor snaps its end up to a whole
+    bar): the reference is padded with silence there and strength jumps to 1 at the end, so SA3
+    continues the music from the kept audio before it; the conditioning holds its last value."""
     from gradio_client import Client
-    t0, t1 = max(0.0, float(section[0])), min(float(b["length"]), float(section[1]))
+    L = float(b["length"])
+    t0, t1 = max(0.0, float(section[0])), float(section[1])
     if t1 - t0 < 1.0:
         raise SystemExit("the section is shorter than 1 s")
     if t1 - t0 > MAX_LEN + 1e-3:
@@ -1038,13 +1346,22 @@ def submit_section(proj: dict, b: dict, url: str, outdir: str | None, window: in
     model = DEFAULT_MODEL | (proj.get("model") or {})
     seeds = seeds or proj.get("seeds") or [0]
     rp = Path(proj["_dir"]) / "ref.section.wav"
-    write_wav(rp, decode(b["ref"])[:, int(round(t0 * SR)):int(round(t1 * SR))])
+    ref = decode(b["ref"])[:, int(round(t0 * SR)):int(round(t1 * SR))]
+    n = int(round((t1 - t0) * SR))
+    if ref.shape[1] < n:                                  # past the end: silence, all regenerated
+        ref = np.concatenate([ref, np.zeros((ref.shape[0], n - ref.shape[1]), ref.dtype)], axis=1)
+    write_wav(rp, ref)
     c = Client(url, verbose=False)
     n_api = _api_n(c)
     since = time.time() - 1
     jobs = []
     for name, box in b["boxes"].items():
-        sbox = {**box, "strength": _shift_keys(box["strength"], t0, t1) if box.get("strength") else box.get("strength"),
+        keys = box.get("strength")
+        if t1 > L + 1e-6:                                 # repeated t = a jump (segments.frame_strength)
+            keys = keys or [[0.0, 1.0]]
+            keys = ([k for k in keys if float(k[0]) <= L] + [[L, float(_sample(keys, np.array([L]))[0])]]
+                    + [[L, 1.0], [t1, 1.0]])
+        sbox = {**box, "strength": _shift_keys(keys, t0, t1) if keys else keys,
                 "cond": _shift_cond(box["cond"], t0),
                 "composite": {**box["composite"], "section": [round(t0, 4), round(t1, 4)], "length": round(t1 - t0, 4)}}
         for seed in seeds:
