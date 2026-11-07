@@ -154,6 +154,38 @@ def progression(seed: int, scale: str = "minor"):
     return {"degrees": compose.progression(seed, scale)}
 
 
+def section_cond(t: dict, bar_s: float, prompt: str) -> dict | None:
+    """Per-section prompts as real conditioning (plan docs/TODO/sa3-arranger.md item 2, built on
+    sa3lab/condmix.py): each section's anchor is the global prompt + its `hint`, at weight 1 over
+    the section, crossfading linearly over one beat centred on every boundary (M1, the composer's
+    cross-attention blend). None when fewer than two distinct prompts (the global prompt alone)."""
+    secs, t0 = [], 0.0
+    for sec in t.get("sections") or []:
+        d = float(sec.get("bars", 0)) * bar_s
+        hint = (sec.get("hint") or "").strip()
+        secs.append((t0, t0 + d, ", ".join(x for x in (prompt.strip(), hint) if x)))
+        t0 += d
+    prompts = list(dict.fromkeys(p for _, _, p in secs if p))
+    if len(prompts) < 2:
+        return None
+    xf = bar_s / 4                                     # one beat (4/4)
+    curves = []
+    for pr in prompts:
+        keys = []
+        for i, (a, b, p) in enumerate(secs):
+            w = 1.0 if p == pr else 0.0
+            if i == 0:
+                keys.append([0.0, w])
+            if i + 1 < len(secs):
+                nw = 1.0 if secs[i + 1][2] == pr else 0.0
+                keys += [[round(b - xf / 2, 4), w], [round(b + xf / 2, 4), nw]]
+            else:
+                keys.append([round(b, 4), w])
+        curves.append(keys)
+    return {"mode": "m1", "anchors": [{"prompt": p} for p in prompts], "curves": curves,
+            "sections": [{"t0": round(a, 4), "t1": round(b, 4), "prompt": p} for a, b, p in secs]}
+
+
 @app.post("/api/send")
 def send(body: dict):
     """Render (cached) and post the job to the studio's inbox.
@@ -171,6 +203,13 @@ def send(body: dict):
            "sha256": r["sha256"], "hash": r["hash"], "slug": render.slug(t["name"]), "name": t["name"],
            "prompt": body.get("prompt") or t.get("prompt") or "", "sigmas": sigmas,
            "seed": None if seed in ("", None) else int(seed), "generate": len(sigmas) > 1 or bool(body.get("generate"))}
+    try:
+        bar_s = json.loads(Path(r["json"]).read_text())["bar_s"]
+        cond = section_cond(t, float(bar_s), rec["prompt"]) if body.get("section_prompts", True) else None
+    except Exception:
+        cond = None
+    if cond:
+        rec["cond"] = cond
     d = OUT / "sends"
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{sid}.json"

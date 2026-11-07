@@ -59,6 +59,12 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - turns the Inpaint and Audio → audio inputs into a dadaspec segment editor (segments.py/.js:
   click-drag spans on the input's spectrogram; inpaint regenerates every span, a2a gives
   each span its own noise level),
+- blends several conditioning anchors per latent frame when the segments box carries a
+  "cond" key (condmix.py: the composer's gap crossfades, sa3lab/composer/), and stamps a
+  composer take's lineage as `gen.composite` (and its anchors' tensors beside it as
+  `<audio>.conds.npz`, condsrc.py, so reusing the take never needs its sources),
+- serves the Composer editor at /sa3/page/composer and the UI kit at /sa3/ui/* (composer/server.py:
+  pieces cut from starred renders, gaps, beat alignment, takes rendered into this studio's queue),
 - links the SA3 Arranger (arranger_link.py/.js: an Arranger button opens the song-sketch
   mini-DAW on :7861; its "Send to SA3" loads the sketch WAV as an a2a job through the same
   restore path, and the render's sidecar gets `gen.arranger`),
@@ -105,6 +111,9 @@ import noise  # noqa: E402  (length-stable seeds: noise cropped from one fixed c
 import extend  # noqa: E402  (Extend button: re-render a clip longer, the clip kept as inpaint context)
 import arranger_link  # noqa: E402  (Arranger button + "Send to SA3" from sa3lab/arranger/)
 import segments  # noqa: E402  (spans drawn on the inpaint / a2a input's dadaspec → mask / σ map)
+import condmix  # noqa: E402  (conditioning anchors blended per latent frame: the box's "cond")
+import condsrc  # noqa: E402  (what a render was conditioned on: a multi-anchor render's bank)
+from composer import server as composer_server  # noqa: E402  (the Composer page + its /sa3/composer/* routes)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
 
@@ -538,7 +547,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
-CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments")
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -887,6 +896,8 @@ def main():
     extend.install(library)
     arranger_link.install(library)
     segments.install(up, library)       # sampler hook, gen.segments, restore passthrough, /sa3/inspec
+    condmix.install(up)                 # DiT hook: the box's "cond" anchors (composer crossfades, morphs)
+    condsrc.install(persist)            # a multi-anchor render's tensors → <audio>.conds.npz on save
     outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
     renderq.install_routes()
@@ -894,6 +905,7 @@ def main():
     anarchy_ui.install_routes()
     outdir.install_routes()
     arranger_link.install_routes()
+    composer_server.install_routes()    # /sa3/page/composer, the UI kit at /sa3/ui/*
     _install_stop_hooks()
     up.render_player = _row_player(up.render_player)   # newest clip = first list row
     orig_render_player = up.render_player   # new entries are persisted in _wire_handlers

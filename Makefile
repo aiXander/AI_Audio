@@ -1,5 +1,5 @@
 PORT ?= 7860
-URL  := http://127.0.0.1:$(PORT)/?__theme=dark
+URL  := http://127.0.0.1:$(PORT)/sa3/app
 UP   := curl -s -o /dev/null http://127.0.0.1:$(PORT)/
 
 .PHONY: start stop arranger push pull help

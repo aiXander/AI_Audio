@@ -1,4 +1,10 @@
 () => {
+  // Every page lives in the tab host (/sa3/app, ui/app.js), which keeps each one alive in its own
+  // iframe; a top-level visit goes there (?solo=1 keeps the studio standalone).
+  if (window.top === window && !new URL(window.location.href).searchParams.has("solo")) {
+    window.location.replace("/sa3/app#studio");
+    return;
+  }
   // Always dark: gradio switches theme mode via the __theme URL param.
   const u = new URL(window.location.href);
   if (u.searchParams.get("__theme") !== "dark") {
@@ -772,6 +778,7 @@
       l.strength !== 1 ? ` ×${num(l.strength)}` : ""}${l.steps ? ` @ ${l.steps[0]}–${l.steps[1]}` : ""}</i></span>`).join("") || null);
     add("A→A input", d.a2a_audio ? esc(base(d.a2a_audio)) : null);
     add("Inpaint", d.inpaint_audio || d.inpaint_range_sec ? esc([base(d.inpaint_audio),
+      d.segments?.strength ? `strength ${d.segments.strength.map((k) => `${num(k[1])}@${num(k[0])}`).join(" ")} s${d.segments.mask ? ` · mask ${d.segments.mask}` : ""}` :
       d.segments?.inpaint ? d.segments.inpaint.map((s) => `${num(s[0])}–${num(s[1])}`).join(", ") + " s" :
       d.inpaint_range_sec ? `${num(d.inpaint_range_sec[0])}–${num(d.inpaint_range_sec[1])} s` : ""].filter(Boolean).join(" · ")) : null);
     if (window.sa3SettingsExtra) rows.push(...window.sa3SettingsExtra(d, esc, num));   // add-ons (anarchy_ui.js)
@@ -1302,7 +1309,7 @@
     let h = c.map((t) => `<span>${esc(String(t))}</span>`).join("");
     for (const l of p.loras || []) h += `<span class="lo" title="LoRA">${esc(l.name)} ×${n(l.strength)}</span>`;
     if (p.a2a) h += `<span class="au" title="Audio → audio guide">a2a ${esc(p.a2a.audio)} @${n(p.a2a.noise)}</span>`;
-    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${p.inpaint.spans != null ? p.inpaint.spans + (p.inpaint.spans === 1 ? " span" : " spans") : `${n(p.inpaint.from)}–${n(p.inpaint.to)} s`}</span>`;
+    if (p.inpaint) h += `<span class="au" title="Inpaint span">inpaint ${esc(p.inpaint.audio)} ${p.inpaint.keys != null ? p.inpaint.keys + (p.inpaint.keys === 1 ? " strength key" : " strength keys") : `${n(p.inpaint.from)}–${n(p.inpaint.to)} s`}</span>`;
     if (p.neg) h += `<span class="ng" title="Negative prompt">neg: ${esc(p.neg)}</span>`;
     return h;
   }

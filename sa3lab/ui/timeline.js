@@ -1,0 +1,500 @@
+// SA3 UI kit: a canvas timeline: ruler (seconds, or bars + beats on a BPM grid), stacked lanes
+// of regions, playhead, zoom / pan, snapping. Pages own the data; the timeline draws what they
+// hand it and reports gestures back, so one edit path (the page's) stays the source of truth.
+//
+//   const tl = new Timeline(host, {gutter, onSeek(t), onSelect(item|null, lane, event), onKey(e), free,
+//                                  onMarquee(ids, event), onGroupMove(ids, dt)})
+//   free: true = an open canvas (the Composer): zoom out and pan as far as you like (to 2 h), and
+//   the view never re-fits by itself when the length changes (only tl.fit() does); default false =
+//   the view is clamped around the content and follows its length (the studio's strength editor).
+//   tl.setLanes([{key, label, sub, flex | h, items: [...], draw(ctx, rect, tl), over(ctx, rect, tl),
+//                 onDraw(t0, t1) (drag on empty space makes a region), onEdit(item, t0, t1, kind),
+//                 onItemClick(item, t, event), marquee}])
+//   tl.setLength(L)  tl.fit()  tl.setGrid(bpm | null)  tl.setPlayhead(t | null)  tl.redraw()
+//
+// Tooltips: a lane's `tip` shows on its gutter label, an item's `tip` (else its label) over the item,
+// its `badgeTip` over its badge dots.
+// An item is {id, t0, t1, label, tip, color, move, resize ("lr" | "l" | "r" | ""), draw(ctx, rect, tl),
+// under, badges: ["ok" | "warn" | "bad", …]}: `under` marks a backdrop (a base clip): on a lane with
+// onDraw, drags over it draw; `badges` draw as dots in the item's top-right corner (Fit panel).
+// A lane may also carry `markers: [{id, t, label, color, cut}]` (keypoints: diamonds on the lane,
+// drag to move → onMarker(marker, t), click → onMarkerClick(marker, event)) and `onClick(t, event)`
+// (a click on empty lane space; default: seek). A lane with `pointer(kind, event, {t, v, rect})`
+// owns its gestures: "down" / "move" / "up" / "hover" / "dbl" arrive with the time under the cursor
+// and v = 0 (lane bottom) .. 1 (top); the timeline only draws (the strength curve editor, strength.js).
+// The gutter (the lane's label column) is the page's too when it asks: `gutter(ctx, rect, tl)` draws
+// over the label (a play button: the Composer's take lanes), `onGutter(event, rect)` gets its clicks.
+// While an item is dragged the timeline draws it at the preview position; onEdit fires once, on
+// release, with the snapped times (the page applies it and calls setLanes again).
+// onEdit's kind is "move" | "l" | "r" (an edge: the page trims), or "ls" | "rs" when the item has
+// `stretch: true` and ⌥ is held at release (the page time-stretches); the item's draw gets the preview
+// rect with `kind`, so a trim can draw a moving crop and a stretch a squeezed one. A click on an item
+// that never moved goes to the lane's onItemClick with the time under the cursor.
+// Multi-selection: the page owns it and hands it over as `tl.multi` (a Set of item ids, drawn selected
+// like `tl.sel`). A lane with `marquee: true` turns a drag on its empty space into a rubber band:
+// onMarquee(ids) with every item of a marquee lane the band touches. Dragging an item that is in
+// tl.multi (with others) drags every movable item of the set by the same snapped Δt (none before 0),
+// and onGroupMove(ids, dt) fires instead of onEdit.
+// Snap: whole beats on a grid, else 0.05 s; hold ⇧ to drag freely.
+// Wheel: ⌘/ctrl (or pinch) zooms at the cursor, otherwise pans. Click the ruler to seek.
+// Section: with `onRange(r | null)` a drag on the ruler marks a time range (snapped; drawn blue across
+// every lane): drag its edges in the ruler to adjust it, its × clears it; onRange fires on release
+// and on clear. tl.setRange([t0, t1] | null) sets it from the page (no callback). Without onRange a
+// ruler drag scrubs the playhead.
+
+const RULER = 26;
+const EDGE = 7;
+
+export class Timeline {
+  constructor(host, opts = {}) {
+    this.o = { gutter: 96, ...opts };
+    this.host = host;
+    this.cv = document.createElement("canvas");
+    this.cv.className = "ui-timeline";
+    this.cv.style.cssText = "display:block;width:100%;height:100%;touch-action:none";
+    host.appendChild(this.cv);
+    this.lanes = [];
+    this.length = 10;
+    this.v0 = 0; this.v1 = 10;
+    this.bpm = null;
+    this.ph = null;
+    this.sel = null;
+    this.multi = new Set();
+    this.range = null;
+    this.drag = null;
+    this.hoverT = null;
+    this.cursor = "default";
+    this.fitted = false;
+    new ResizeObserver(() => this.redraw()).observe(host);
+    this.cv.addEventListener("pointerdown", (e) => this.down(e));
+    this.cv.addEventListener("pointermove", (e) => this.move(e));
+    this.cv.addEventListener("pointerleave", () => { this.hoverT = null; this.redraw(); });
+    this.cv.addEventListener("pointerup", (e) => this.finish(e));
+    this.cv.addEventListener("pointercancel", (e) => this.finish(e));
+    this.cv.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
+    this.cv.addEventListener("dblclick", (e) => {
+      const [px, py] = this.pos(e), h = this.hit(px, py);
+      if (h.r && h.r.lane.pointer) h.r.lane.pointer("dbl", e, this.lanePos(h.r, px, py));
+    });
+  }
+
+  // ── geometry ──
+  get W() { return this.cv.clientWidth; }
+  get H() { return this.cv.clientHeight; }
+  x(t) { const g = this.o.gutter; return g + ((t - this.v0) / (this.v1 - this.v0)) * (this.W - g - 8); }
+  t(x) { const g = this.o.gutter; return this.v0 + ((x - g) / (this.W - g - 8)) * (this.v1 - this.v0); }
+  get beat() { return this.bpm ? 60 / this.bpm : null; }
+  snap(t, e) {
+    if (e && e.shiftKey) return Math.round(t * 1000) / 1000;
+    if (this.beat) return Math.round(t / this.beat) * this.beat;
+    return Math.round(t * 20) / 20;
+  }
+  laneRects() {
+    const fixed = this.lanes.reduce((s, l) => s + (l.h || 0), 0);
+    const flex = this.lanes.reduce((s, l) => s + (l.h ? 0 : l.flex || 1), 0);
+    const free = Math.max(0, this.H - RULER - fixed - 4 * this.lanes.length);
+    let y = RULER + 2;
+    return this.lanes.map((l) => {
+      const h = l.h || Math.round((free * (l.flex || 1)) / Math.max(1, flex));
+      const r = { lane: l, x: this.o.gutter, y, w: this.W - this.o.gutter - 8, h };
+      y += h + 4;
+      return r;
+    });
+  }
+
+  // ── state ──
+  setLanes(lanes) { this.lanes = lanes; this.redraw(); }
+  setLength(L) {
+    const was = this.length;
+    this.length = Math.max(0.5, L || 0.5);
+    if (this.o.free ? !this.fitted : (this.v1 >= was - 1e-6 || this.v1 > this.length * 1.05 || this.v0 > this.length)) this.fit();
+    else this.redraw();
+  }
+  fit() { this.fitted = true; this.v0 = 0; this.v1 = this.length * 1.02; this.redraw(); }
+  setGrid(bpm) { this.bpm = bpm || null; this.redraw(); }
+  setPlayhead(t) { this.ph = t; this.redraw(); }
+  select(id) { this.sel = id; this.redraw(); }
+  setRange(r) { this.range = r ? [r[0], r[1]] : null; this.redraw(); }
+  rangeHit(px) {                                                // the section's × / edges, in the ruler
+    if (!this.range) return null;
+    const xa = this.x(this.range[0]), xb = this.x(this.range[1]);
+    if (Math.abs(px - this.rangeX()) <= 8) return "x";
+    if (Math.abs(px - xa) <= 5) return "a";
+    if (Math.abs(px - xb) <= 5) return "b";
+    return null;
+  }
+  rangeX() { const xb = this.x(this.range[1]); return xb + 22 < this.W ? xb + 11 : xb - 11; }
+  redraw() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => { this._raf = 0; this.paint(); });
+  }
+
+  // ── hit testing ──
+  hit(px, py) {
+    for (const r of this.laneRects()) {
+      if (py < r.y || py > r.y + r.h) continue;
+      for (const m of r.lane.markers || []) {
+        if (Math.abs(px - this.x(m.t)) <= 7) return { r, it: null, marker: m };
+      }
+      for (const it of (r.lane.items || []).slice().reverse()) {
+        const a = this.x(it.t0), b = this.x(it.t1);
+        if (px < a || px > b) continue;          // handles reach inward only: two items sharing an edge each keep theirs
+        const e = Math.min(EDGE, (b - a) / 3);
+        let mode = it.move ? "move" : "select";
+        const rz = it.resize || "";
+        if (rz.includes("l") && px - a <= e) mode = "l";
+        else if (rz.includes("r") && b - px <= e) mode = "r";
+        return { r, it, mode };
+      }
+      return { r, it: null };
+    }
+    return { r: null, it: null };
+  }
+  pos(e) { const b = this.cv.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; }
+  lanePos(r, px, py) {
+    return { t: Math.max(0, Math.min(this.length, this.t(px))), v: Math.max(0, Math.min(1, 1 - (py - r.y) / r.h)), rect: r, px, py };
+  }
+  // where a page event (a drop) lands: {lane, t} (lane null outside every lane)
+  at(e) {
+    const [px, py] = this.pos(e);
+    const r = this.laneRects().find((q) => py >= q.y && py <= q.y + q.h);
+    return { lane: r ? r.lane : null, t: Math.max(0, this.t(px)), px, py };
+  }
+
+  down(e) {
+    const [px, py] = this.pos(e);
+    if (px < this.o.gutter) {
+      const r = py >= RULER && this.laneRects().find((q) => py >= q.y && py <= q.y + q.h);
+      if (r && r.lane.onGutter) r.lane.onGutter(e, r);
+      return;
+    }
+    this.cv.setPointerCapture(e.pointerId);
+    if (py < RULER) {                                            // ruler: seek, then scrub (or mark a section)
+      const seek = (ev) => { const t = Math.max(0, Math.min(this.length, this.t(this.pos(ev)[0]))); if (this.o.onSeek) this.o.onSeek(t); };
+      const rh = this.o.onRange && this.rangeHit(px);
+      if (rh === "x") { this.range = null; this.o.onRange(null); this.redraw(); return; }
+      if (rh) { this.drag = { kind: "range", fix: this.range[rh === "a" ? 1 : 0], p: this.range.slice() }; return; }
+      seek(e);
+      this.drag = this.o.onRange ? { kind: "rsel", x0: px, a: this.t(px) } : { kind: "scrub", seek };
+      return;
+    }
+    const h = this.hit(px, py);
+    if (h.r && h.r.lane.pointer) {
+      this.drag = { kind: "lane", lane: h.r.lane, r: h.r };
+      h.r.lane.pointer("down", e, this.lanePos(h.r, px, py));
+      this.redraw();
+      return;
+    }
+    if (h.marker) {
+      this.sel = h.marker.id;
+      if (this.o.onSelect) this.o.onSelect({ id: h.marker.id, marker: h.marker }, h.r.lane);
+      this.drag = { kind: "marker", m: h.marker, lane: h.r.lane, x0: px, moved: false, ev: e };
+      this.redraw();
+      return;
+    }
+    if (h.it && h.it.under && h.r.lane.onDraw) h.it = null;          // a backdrop item (a base clip): drags draw over it
+    if (h.it) {
+      this.sel = h.it.id;
+      if (this.o.onSelect) this.o.onSelect(h.it, h.r.lane, e);       // the page may set tl.multi here
+      const d = { kind: h.mode, it: h.it, lane: h.r.lane, x0: px, t0: h.it.t0, t1: h.it.t1, moved: false };
+      if (h.mode === "move" && this.multi.size > 1 && this.multi.has(h.it.id)) {   // the set moves as one
+        const group = this.lanes.flatMap((l) => (l.items || []).filter((x) => x.move && this.multi.has(x.id)));
+        d.gids = new Set(group.map((x) => x.id));
+        d.gmin = Math.min(...group.map((x) => x.t0));
+      }
+      this.drag = d;
+    } else if (h.r) {
+      this.sel = null;
+      if (this.o.onSelect) this.o.onSelect(null, h.r.lane, e);
+      this.drag = { kind: h.r.lane.onDraw ? "draw" : "click", lane: h.r.lane, x0: px, y0: py, a: this.t(px), moved: false };
+    }
+    this.redraw();
+  }
+
+  tip(px, py) {                                                 // native tooltip: lane gutter labels + items
+    let s = "";
+    if (py < RULER) s = px < this.o.gutter ? "" : !this.o.onRange ? "click or drag: move the playhead"
+      : { x: "clear the section", a: "drag: move the section's start", b: "drag: move the section's end" }[this.rangeHit(px)] || "click: move the playhead · drag: mark a section";
+    else {
+      const r = this.laneRects().find((q) => py >= q.y && py <= q.y + q.h);
+      if (r && px < this.o.gutter) s = r.lane.tip || "";
+      else if (r && !r.lane.pointer) {
+        const h = this.hit(px, py), n = h.it ? (h.it.badges || []).length : 0;
+        const onDots = n && h.it.badgeTip && py < r.y + 18 && px > this.x(h.it.t1) - 12 - n * 9;   // the badge dots, top-right
+        s = onDots ? h.it.badgeTip : h.it ? (h.it.tip || h.it.label || "") : h.marker ? (h.marker.tip || h.marker.label || "") : r.lane.tip || "";
+      }
+      else return;                                               // a pointer lane sets its own
+    }
+    if (this.cv.title !== s) this.cv.title = s;
+  }
+
+  move(e) {
+    const [px, py] = this.pos(e);
+    this.hoverT = px >= this.o.gutter ? this.t(px) : null;
+    const d = this.drag;
+    if (!d) this.tip(px, py);
+    if (d && d.kind === "lane") { d.lane.pointer("move", e, this.lanePos(d.r, px, py)); return; }
+    if (!d) {
+      const h0 = py >= RULER ? this.hit(px, py) : { it: null };
+      if (h0.r && h0.r.lane.pointer) { h0.r.lane.pointer("hover", e, this.lanePos(h0.r, px, py)); this.redraw(); return; }
+    }
+    if (!d) {
+      const h = py >= RULER ? this.hit(px, py) : { it: null };
+      const c = py < RULER && px >= this.o.gutter ? ({ x: "pointer", a: "ew-resize", b: "ew-resize" }[this.o.onRange && this.rangeHit(px)] || "col-resize") : px < this.o.gutter ? (h.r && h.r.lane.onGutter ? "pointer" : "default") : h.marker ? "grab" : h.it && !(h.it.under && h.r.lane.onDraw) ? ({ l: "ew-resize", r: "ew-resize", move: "grab" }[h.mode] || "pointer")
+        : h.r && h.r.lane.onDraw ? "crosshair" : "default";
+      if (c !== this.cursor) { this.cursor = c; this.cv.style.cursor = c; }
+      this.redraw();
+      return;
+    }
+    if (d.kind === "scrub") return d.seek(e);
+    if (d.kind === "rsel") { if (Math.abs(px - d.x0) <= 3) return; d.kind = "range"; d.fix = Math.max(0, Math.min(this.length, this.snap(d.a, e))); }
+    if (d.kind === "range") {
+      const t = Math.max(0, Math.min(this.length, this.snap(this.t(px), e)));
+      d.p = [Math.min(d.fix, t), Math.max(d.fix, t)];
+      this.redraw();
+      return;
+    }
+    if (d.kind === "click" && d.lane.marquee && Math.hypot(px - d.x0, py - d.y0) > 4) d.kind = "marquee";
+    if (d.kind === "marquee") { d.box = [d.x0, d.y0, px, py]; this.redraw(); return; }
+    if (Math.abs(px - d.x0) > 3) d.moved = true;
+    if (!d.moved) return;
+    const dt = this.t(px) - this.t(d.x0);
+    if (d.kind === "marker") { d.p = [Math.max(0, Math.min(this.length, this.snap(this.t(px), e)))]; this.redraw(); return; }
+    if (d.kind === "move") {
+      const len = d.t1 - d.t0;
+      let a = this.snap(d.t0 + dt, e);
+      if (d.gids) a = Math.max(a, d.t0 - d.gmin);             // no item of the set moves before 0
+      d.p = [a, a + len];
+    } else if (d.kind === "l") d.p = [Math.min(this.snap(d.t0 + dt, e), d.t1 - 0.1), d.t1];
+    else if (d.kind === "r") d.p = [d.t0, Math.max(this.snap(d.t1 + dt, e), d.t0 + 0.1)];
+    if (d.kind === "l" || d.kind === "r") d.stretch = !!(e.altKey && d.it.stretch);   // ⌥ while dragging an edge: stretch
+    else if (d.kind === "draw") {
+      const b = this.snap(this.t(px), e), a = this.snap(d.a, e);
+      d.p = [Math.max(0, Math.min(a, b)), Math.min(this.length, Math.max(a, b))];
+    }
+    this.redraw();
+  }
+
+  finish(e) {
+    const d = this.drag;
+    this.drag = null;
+    if (!d) return;
+    if (d.kind === "lane") { const [px, py] = this.pos(e); d.lane.pointer("up", e, this.lanePos(d.r, px, py)); this.redraw(); return; }
+    if (d.kind === "range") {
+      if (d.p && d.p[1] - d.p[0] >= 0.25) { this.range = d.p; this.o.onRange(d.p.slice()); }
+      this.redraw();
+      return;
+    }
+    if (d.kind === "rsel") return;
+    if (d.kind === "marker") {
+      if (d.moved && d.p && d.lane.onMarker) d.lane.onMarker(d.m, d.p[0]);
+      else if (!d.moved && d.lane.onMarkerClick) d.lane.onMarkerClick(d.m, e);
+    } else if (d.kind === "click" || (d.kind === "draw" && !d.moved)) {
+      const t = Math.max(0, Math.min(this.length, d.a));
+      if (d.lane && d.lane.onClick) d.lane.onClick(t, e);
+      else if (this.o.onSeek) this.o.onSeek(t);
+    } else if (d.kind === "marquee") {
+      if (d.box && this.o.onMarquee) this.o.onMarquee(this.inBox(d.box), e);
+    } else if (d.kind === "draw" && d.p && d.p[1] - d.p[0] > 0.05) d.lane.onDraw(d.p[0], d.p[1]);
+    else if (d.it && !d.moved) { if (d.lane.onItemClick) d.lane.onItemClick(d.it, Math.max(0, Math.min(this.length, this.t(d.x0))), e); }
+    else if (d.gids && d.p) { if (this.o.onGroupMove) this.o.onGroupMove([...d.gids], d.p[0] - d.t0); }
+    else if (d.p && d.lane && d.lane.onEdit && d.it) d.lane.onEdit(d.it, d.p[0], d.p[1], d.kind + (d.stretch ? "s" : ""));
+    this.redraw();
+  }
+
+  inBox([x0, y0, x1, y1]) {                                     // item ids of marquee lanes a rubber band touches
+    const ta = this.t(Math.min(x0, x1)), tb = this.t(Math.max(x0, x1)), ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+    return this.laneRects().filter((r) => r.lane.marquee && r.y + r.h >= ya && r.y <= yb)
+      .flatMap((r) => (r.lane.items || []).filter((it) => it.t1 > ta && it.t0 < tb).map((it) => it.id));
+  }
+
+  wheel(e) {
+    e.preventDefault();
+    const [px] = this.pos(e);
+    if (e.ctrlKey || e.metaKey) {
+      const k = Math.exp(e.deltaY * 0.01);
+      const tc = this.t(Math.max(this.o.gutter, px));
+      let span = Math.min(this.o.free ? 7200 : this.length * 1.5, Math.max(0.5, (this.v1 - this.v0) * k));
+      this.v0 = tc - (tc - this.v0) * (span / (this.v1 - this.v0));
+      this.v1 = this.v0 + span;
+    } else {
+      const dt = ((e.deltaX || e.deltaY) / this.W) * (this.v1 - this.v0);
+      this.v0 += dt; this.v1 += dt;
+    }
+    const span = this.v1 - this.v0;
+    if (this.v0 < -span * 0.05) { this.v0 = -span * 0.05; this.v1 = this.v0 + span; }
+    const hi = this.o.free ? Math.max(7200, this.length + span) : this.length + span * 0.5;
+    if (this.v1 > hi) { this.v1 = hi; this.v0 = this.v1 - span; }
+    this.redraw();
+  }
+
+  // ── painting ──
+  paint() {
+    const cv = this.cv, dpr = devicePixelRatio || 1, W = this.W, H = this.H;
+    if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const rects = this.laneRects(), dr = this.drag;
+    this.mq = dr && dr.kind === "marquee" && dr.box ? new Set(this.inBox(dr.box)) : null;
+    this.paintRuler(g, rects);
+    for (const r of rects) this.paintLane(g, r);
+    this.paintRange(g, rects);
+    if (this.mq) {                                                  // the rubber band
+      const [x0, y0, x1, y1] = dr.box;
+      g.fillStyle = "rgba(155,140,255,0.10)"; g.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      g.strokeStyle = "#c4bbff"; g.lineWidth = 1; g.setLineDash([4, 3]);
+      g.strokeRect(Math.min(x0, x1) + 0.5, Math.min(y0, y1) + 0.5, Math.abs(x1 - x0), Math.abs(y1 - y0));
+      g.setLineDash([]);
+    }
+    if (this.ph != null) {
+      const x = this.x(this.ph);
+      if (x >= this.o.gutter) { g.fillStyle = "#fff"; g.fillRect(x - 0.75, 0, 1.5, H); }
+    }
+    if (this.hoverT != null && !this.drag) {
+      const x = this.x(this.hoverT);
+      g.fillStyle = "rgba(255,255,255,0.18)"; g.fillRect(x, RULER, 1, H - RULER);
+    }
+  }
+
+  paintRange(g, rects) {                                        // the marked section: blue over the ruler + every lane
+    const d = this.drag, r = d && d.kind === "range" && d.p ? d.p : this.range;
+    if (!r) return;
+    const G = this.o.gutter, bottom = rects.length ? rects[rects.length - 1].y + rects[rects.length - 1].h : this.H;
+    const xa = this.x(r[0]), xb = this.x(r[1]), a = Math.max(G, xa), b = Math.min(this.W - 8, xb);
+    if (b > a) {
+      g.fillStyle = "rgba(124,196,255,0.07)"; g.fillRect(a, RULER, b - a, bottom - RULER);
+      g.fillStyle = "rgba(124,196,255,0.30)"; g.fillRect(a, 0, b - a, RULER);
+      const s = `${(r[1] - r[0]).toFixed(1)} s`;
+      g.font = "600 10.5px Inter, sans-serif"; g.textBaseline = "middle";
+      if (b - a > g.measureText(s).width + 12) { g.fillStyle = "#dff0ff"; g.fillText(s, a + 6, RULER - 9); }
+    }
+    g.fillStyle = "rgba(124,196,255,0.9)";
+    for (const x of [xa, xb]) if (x >= G && x <= this.W) g.fillRect(x - 0.75, 0, 1.5, bottom);
+    if (d && d.kind === "range") return;
+    const cx = this.rangeX(), cy = RULER / 2;                     // × clears it
+    if (cx < G) return;
+    g.fillStyle = "#7cc4ff"; g.beginPath(); g.arc(cx, cy, 7.5, 0, 7); g.fill();
+    g.strokeStyle = "#0b0b10"; g.lineWidth = 1.6;
+    g.beginPath(); g.moveTo(cx - 3, cy - 3); g.lineTo(cx + 3, cy + 3); g.moveTo(cx + 3, cy - 3); g.lineTo(cx - 3, cy + 3); g.stroke();
+  }
+
+  ticks() {
+    const span = this.v1 - this.v0, px = this.W - this.o.gutter;
+    if (this.beat) {
+      const beatPx = (this.beat / span) * px;
+      const every = [1, 4, 16, 64, 256, 1024].find((n) => beatPx * n > 14) || 4096;
+      return { step: this.beat * every, minor: beatPx > 6 ? this.beat : null, label: (t) => {
+        const b = Math.round(t / this.beat);
+        return b % 4 === 0 ? String(b / 4 + 1) : `${Math.floor(b / 4) + 1}.${(b % 4) + 1}`;
+      }, major: (t) => Math.round(t / this.beat) % 4 === 0 };
+    }
+    const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    const step = steps.find((s) => (s / span) * px > 60) || 1200;
+    return { step, minor: null, label: (t) => (t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, "0")}` : `${+t.toFixed(2)}s`), major: () => true };
+  }
+
+  paintRuler(g, rects) {
+    const W = this.W, G = this.o.gutter, bottom = rects.length ? rects[rects.length - 1].y + rects[rects.length - 1].h : this.H;
+    g.fillStyle = "#0c0c11"; g.fillRect(G, 0, W - G, RULER);
+    const tk = this.ticks();
+    g.font = "10.5px JetBrains Mono, monospace";
+    g.textBaseline = "middle";
+    if (tk.minor) {
+      g.fillStyle = "rgba(255,255,255,0.035)";
+      for (let t = Math.ceil(this.v0 / tk.minor) * tk.minor; t < this.v1; t += tk.minor) {
+        const x = this.x(t);
+        if (x >= G) g.fillRect(x, RULER, 1, bottom - RULER);
+      }
+    }
+    for (let t = Math.max(0, Math.ceil(this.v0 / tk.step) * tk.step); t < this.v1; t += tk.step) {
+      const x = this.x(t);
+      if (x < G) continue;
+      const maj = tk.major(t);
+      g.fillStyle = maj ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)";
+      g.fillRect(x, RULER, 1, bottom - RULER);
+      g.fillStyle = maj ? "#8b8b9c" : "#5d5d6c";
+      g.fillRect(x, RULER - (maj ? 9 : 5), 1, maj ? 9 : 5);
+      if (maj || (tk.step / (this.v1 - this.v0)) * (W - G) > 40) g.fillText(tk.label(t), x + 4, 10);
+    }
+    const xe = this.x(this.length);                               // project end
+    if (xe > G && xe < W) { g.fillStyle = "rgba(255,184,107,0.6)"; g.fillRect(xe, 0, 1.5, bottom); }
+    g.fillStyle = "#5d5d6c";
+    g.fillText(this.bpm ? `${+this.bpm.toFixed(2)} BPM` : "free time", 10, 13);
+  }
+
+  paintLane(g, r) {
+    const l = r.lane, G = this.o.gutter;
+    g.fillStyle = "rgba(255,255,255,0.025)";
+    g.fillRect(r.x, r.y, r.w, r.h);
+    g.save();
+    g.beginPath(); g.rect(r.x, r.y, r.w, r.h); g.clip();
+    if (l.draw) l.draw(g, r, this);
+    for (const it of l.items || []) {
+      const dr = this.drag;
+      let d = dr && dr.it && dr.it.id === it.id && dr.p ? dr.p : null;   // by id: the page may hand new item objects mid-drag
+      if (!d && dr && dr.gids && dr.p && dr.gids.has(it.id)) { const dt = dr.p[0] - dr.t0; d = [it.t0 + dt, it.t1 + dt]; }   // the rest of a moving set
+      const t0 = d ? d[0] : it.t0, t1 = d ? d[1] : it.t1;
+      const a = this.x(t0), b = this.x(t1);
+      if (b < r.x || a > r.x + r.w) continue;
+      const kind = d ? (dr.it.id === it.id ? dr.kind + (dr.stretch ? "s" : "") : "move") : null;
+      const rect = { x: a, y: r.y, w: b - a, h: r.h, t0, t1, kind };
+      if (it.draw) it.draw(g, rect, this);
+      else { g.fillStyle = it.color || "rgba(155,140,255,0.25)"; g.fillRect(a, r.y + 2, b - a, r.h - 4); }
+      if (it.label && b - a > 30) {
+        g.font = "11px Inter, sans-serif"; g.textBaseline = "top";
+        const s = it.label, tw = Math.min(b - a - 8, g.measureText(s).width + 8);
+        g.fillStyle = "rgba(9,9,13,0.72)"; g.fillRect(a + 3, r.y + 4, tw, 16);
+        g.fillStyle = "#e8e8f0";
+        g.save(); g.beginPath(); g.rect(a + 3, r.y + 4, tw, 16); g.clip();
+        g.fillText(s, a + 7, r.y + 6.5); g.restore();
+      }
+      const on = this.sel === it.id || this.multi.has(it.id) || !!(this.mq && this.mq.has(it.id));
+      g.strokeStyle = on ? "#c4bbff" : it.stroke || "rgba(255,255,255,0.16)";
+      g.lineWidth = on ? 2 : 1;
+      g.strokeRect(a + 0.5, r.y + 1.5, b - a - 1, r.h - 3);
+      if (d) { g.fillStyle = "rgba(196,187,255,0.12)"; g.fillRect(a, r.y, b - a, r.h); }
+      if (d && (dr.kind === "l" || dr.kind === "r") && dr.it.id === it.id) {   // what an edge drag does
+        const s = dr.stretch ? `stretch ×${((t1 - t0) / Math.max(1e-6, dr.t1 - dr.t0)).toFixed(2)}` : it.stretch ? "trim · hold ⌥ to stretch" : "trim";
+        g.font = "10.5px Inter, sans-serif"; g.textBaseline = "bottom";
+        const tw = g.measureText(s).width + 8, lx = dr.kind === "l" ? a + 3 : Math.max(a + 3, b - tw - 3);
+        g.fillStyle = "rgba(9,9,13,0.8)"; g.fillRect(lx, r.y + r.h - 19, tw, 15);
+        g.fillStyle = dr.stretch ? "#ffd479" : "#e8e8f0"; g.fillText(s, lx + 4, r.y + r.h - 5.5);
+      }
+      (it.badges || []).forEach((st, k) => {
+        g.fillStyle = { ok: "#7ee2a0", warn: "#ffb86b", bad: "#ff6b81" }[st] || "#5d5d6c";
+        g.beginPath(); g.arc(b - 8 - k * 9, r.y + 10, 3.2, 0, 7); g.fill();
+      });
+    }
+    for (const m of l.markers || []) {                               // keypoints
+      const dm = this.drag && this.drag.kind === "marker" && this.drag.m === m && this.drag.p ? this.drag.p[0] : m.t;
+      const x = this.x(dm), on = this.sel === m.id, cy = r.y + r.h / 2;
+      g.fillStyle = m.color || "#c4bbff";
+      g.strokeStyle = on ? "#fff" : "rgba(9,9,13,0.9)"; g.lineWidth = on ? 2 : 1.2;
+      g.beginPath(); g.moveTo(x, cy - 7); g.lineTo(x + 6, cy); g.lineTo(x, cy + 7); g.lineTo(x - 6, cy); g.closePath(); g.fill(); g.stroke();
+      if (m.cut) { g.fillStyle = "#fff"; g.fillRect(x - 0.5, r.y + 2, 1, r.h - 4); }
+      if (m.label) {
+        g.font = "10.5px Inter, sans-serif"; g.textBaseline = "top";
+        const s = m.label.length > 34 ? m.label.slice(0, 33) + "…" : m.label, tw = g.measureText(s).width + 8;
+        g.fillStyle = "rgba(9,9,13,0.8)"; g.fillRect(x + 8, r.y + 3, tw, 15);
+        g.fillStyle = "#e8e8f0"; g.fillText(s, x + 12, r.y + 5.5);
+      }
+    }
+    if (this.drag && this.drag.kind === "draw" && this.drag.lane === l && this.drag.p) {
+      const a = this.x(this.drag.p[0]), b = this.x(this.drag.p[1]);
+      g.fillStyle = "rgba(155,140,255,0.28)"; g.fillRect(a, r.y, b - a, r.h);
+      g.strokeStyle = "#c4bbff"; g.strokeRect(a + 0.5, r.y + 0.5, b - a - 1, r.h - 1);
+    }
+    if (l.over) l.over(g, r, this);
+    g.restore();
+    g.fillStyle = "#0c0c11"; g.fillRect(0, r.y, G - 6, r.h);           // gutter label
+    g.fillStyle = "#b9b9c8"; g.font = "600 11.5px Inter, sans-serif"; g.textBaseline = "top";
+    g.fillText(l.label || "", 10, r.y + 8);
+    if (l.sub) {
+      g.fillStyle = "#6d6d7c"; g.font = "10.5px Inter, sans-serif";
+      String(l.sub).split("\n").forEach((s, i) => g.fillText(s, 10, r.y + 25 + i * 14));
+    }
+    if (l.gutter) l.gutter(g, { x: 0, y: r.y, w: G - 6, h: r.h }, this);
+  }
+}

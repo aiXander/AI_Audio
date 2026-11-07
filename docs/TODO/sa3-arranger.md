@@ -15,15 +15,16 @@ call only, not yet clicked live.
    stack them with `sa3lab/dadagrid.py`. Log the result in the research Claude Doc; set the
    arranger's default σ / ladder from it. This is also the a2a-fidelity test in
    [sa3-sound-level-control.md](sa3-sound-level-control.md).
-2. **Per-section prompts as real conditioning.** Section `hint`s are metadata in v1 (joined into the
-   one global prompt). v2: a custom sampler that blends the DiT's velocity under each section's
-   prompt along the time axis (crossfade masks of a few frames at boundaries). Needs a wrap of
-   `sample_flow_pingpong` (the studio already wraps it for stop/progress) and N text encodings per
-   step, so cost grows with the number of distinct prompts.
+2. **Per-section prompts as real conditioning — built 2026-11-06** (on the composer's condmix.py, M1
+   cross-attention blend, not a velocity-blend sampler): every send whose sections carry ≥ 2 distinct
+   `hint`s gets one anchor per section (prompt + hint), crossfading over one beat at boundaries
+   (`arranger/server.py` section_cond → the send record's `cond` → `arranger_link.py` → a
+   conditioning-only segments box, which a2a jobs now honour). Open: Xander's listen of a sectioned
+   send vs the joined-hints prompt.
 3. **Multi-span inpaint anchors.** Keep chosen sections of a previous SA3 render exactly (a drop
    you liked) and regenerate the rest from the sketch. The multi-span mask builder exists now
-   (`sa3lab/segments.py`, the studio's inpaint editor); the compositing workspace that builds on it is
-   [sa3-composer.md](sa3-composer.md).
+   (`sa3lab/segments.py`, the studio's inpaint editor); the compositing workspace built on it is the Composer,
+   [../reference/sa3-composer.md](../reference/sa3-composer.md).
 4. **Probe guidance from the control curves** (handle 8 there): steer x̂0 toward the template's
    chroma / onset curves between steps instead of relying on a2a's single σ knob.
 5. **LLM "describe the track → template" helper.** Paid API: ask Xander before building. v1's AI

@@ -12,9 +12,14 @@ Reads outputs/sa3_bench_quality/manifest.json and writes outputs/sa3_bench_quali
   label.html, serve.py, label_config.json   the blind A/B page (sa3lab/bench/labeler/)
 Idempotent: existing clips keep their names and order; new renders get new ones.
 
-Run: uv run sa3lab/bench/make_listen.py
+Run: uv run sa3lab/bench/make_listen.py [--src outputs/<folder>]
+
+Any folder works with `--src`: its manifest.json may also carry "labels" (config → label shown
+on Reveal), "page" (label_config: title, chips, neg_chips), and per file "excerpt": [s0, s1]
+(seconds to keep) and "label". The composer's acceptance test uses this
+(sa3lab/composer/acceptance.py writes the manifest).
 """
-import json, random, secrets, shutil
+import argparse, json, random, secrets, shutil
 from pathlib import Path
 
 import numpy as np, pyloudnorm as pyln, soundfile as sf
@@ -39,12 +44,20 @@ CONFIG = {"title": "SA3 quality tricks · blind A/B",
 
 
 def main():
+    global SRC, DST
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src", default=None, help="folder holding manifest.json (default: the quality bench)")
+    a = ap.parse_args()
+    if a.src:
+        SRC = Path(a.src).resolve()
+        DST = SRC / "listen"
     man = json.loads((SRC / "manifest.json").read_text())
+    labels = {**LABELS, **man.get("labels", {})}
     prompts = {p["id"]: p for p in man["prompts"]}
     DST.mkdir(exist_ok=True)
     for f in ("label.html", "serve.py"):
         shutil.copy(Path(__file__).parent / "labeler" / f, DST / f)
-    (DST / "label_config.json").write_text(json.dumps(CONFIG, indent=1))
+    (DST / "label_config.json").write_text(json.dumps(man.get("page") or CONFIG, indent=1))
     key_path = DST / "blind_key.json"
     key = json.loads(key_path.read_text()) if key_path.exists() else {}
     by_src = {v["file"]: k for k, v in key.items()}
@@ -60,10 +73,12 @@ def main():
         if clip is None:
             clip, new = "clip_" + secrets.token_hex(4), new + 1
             key[clip] = dict(file=r["file"], prompt=r["prompt"], config=r["config"], decoder=r["decoder"],
-                             label=LABELS.get(r["config"], r["config"]), order=rng.random())
+                             label=r.get("label") or labels.get(r["config"], r["config"]), order=rng.random())
         x, sr = sf.read(src, dtype="float64"); assert sr == SR
         if r["config"] == "E_long120":
             x = x[30 * SR: 60 * SR]
+        if r.get("excerpt"):
+            x = x[int(r["excerpt"][0] * SR): int(r["excerpt"][1] * SR)]
         gain = 10 ** ((TARGET_LUFS - meter.integrated_loudness(x)) / 20)
         gain = min(gain, PEAK_CAP / (np.abs(x).max() + 1e-12))
         sf.write(DST / f"{clip}.wav", x * gain, SR, subtype="PCM_24")

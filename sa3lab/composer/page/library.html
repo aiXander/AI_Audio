@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA3 Library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/sa3/ui/tokens.css">
+<style>
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  #lib { flex: 1; min-height: 0; }
+  #embst { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="lib"></div>
+<script type="module">
+// The Library page (spec 3.2): the starred set (+ highlights) in the kit's browser, full width.
+// Same component as the composer's side panel; served by composer/server.py at /sa3/page/library.
+import { mountShell } from "/sa3/ui/shell.js";
+import { Browser } from "/sa3/ui/browser.js";
+import * as api from "/sa3/ui/api.js";
+const sh = mountShell(document.body, { active: "library" });
+const st = document.createElement("span"); st.id = "embst"; sh.right.prepend(st);
+async function emb() {
+  try { const s = await api.get("/sa3/embed/status"); st.textContent = `similarity: ${s.encoded}/${s.starred} embedded${s.busy ? " · encoding…" : s.pending ? (s.idle ? "" : " · waits for an idle queue") : ""}`; st.title = s.last_error || ""; }
+  catch (e) { st.textContent = ""; }
+}
+emb(); setInterval(emb, 5000);
+const br = new Browser(document.getElementById("lib"), {
+  onAdd: (row, r) => window.open(`/sa3/page/composer?add=${encodeURIComponent(row.id)}&s0=${r[0].toFixed(3)}&s1=${r[1].toFixed(3)}`, "sa3-composer"),
+});
+br.reload();
+</script>
+</body>
+</html>

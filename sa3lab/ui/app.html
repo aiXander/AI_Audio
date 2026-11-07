@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/sa3/ui/tokens.css">
+<style>
+  /* the tab host (app.js): one fixed bar, every page in its own kept-alive iframe */
+  html, body { overflow: hidden; }
+  #hostbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; }
+  #hostbar .left { display: flex; align-items: center; gap: 18px; height: 100%; }
+  /* over a kit page (Library, Composer) the bar shrinks to brand + tabs: the page's own bar carries its widgets and the queue */
+  #hostbar.overlay { right: auto; border-bottom-color: var(--line); padding-right: 0; }
+  #hostbar.overlay .right { display: none; }
+  #frames iframe { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; border: 0; background: var(--bg);
+    visibility: hidden; pointer-events: none; }
+  #frames iframe.on { visibility: visible; pointer-events: auto; }
+  #frames .down { position: fixed; left: 0; right: 0; top: 44px; padding: 40px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header id="hostbar" class="ui-shell"><div class="left"><div class="brand"><i></i>SA3</div><nav></nav></div><div class="right"><div class="q" title="the studio's render queue"></div></div></header>
+<main id="frames"></main>
+<script type="module" src="/sa3/ui/app.js"></script>
+</body>
+</html>

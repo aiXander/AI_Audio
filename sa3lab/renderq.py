@@ -77,11 +77,11 @@ def preview(vals: list) -> dict:
         p["sigma"] = _num(g("sigma"))
     if inp:
         p["inpaint"] = {"audio": inp, "from": _num(g("inp_start")), "to": _num(g("inp_end"))}
-    seg = vals[-1] if vals and isinstance(vals[-1], str) and vals[-1].startswith('{"inpaint"') else None
-    if seg:                         # segments.py's spans box rides last in a waiting job's inputs
+    seg = vals[-1] if vals and isinstance(vals[-1], str) and vals[-1].startswith(('{"inpaint"', '{"strength"')) else None
+    if seg:                         # segments.py's strength-curve box rides last in a waiting job's inputs
         import segments
         if inp:
-            p["inpaint"]["spans"] = len(segments.parse(seg) or [])
+            p["inpaint"]["keys"] = len((segments.parse_plan(seg) or {}).get("keys", []))
     loras = []
     for i in range(3):
         s = vals[_LORA0 + 5 * i: _LORA0 + 5 * i + 5]

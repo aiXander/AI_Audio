@@ -1,15 +1,22 @@
-/* Dadaspec timeline on the Inpaint / Audio → audio inputs; inpaint spans (segments.js, segments.py). */
+/* Dadaspec timeline on the Inpaint / Audio → audio inputs; the inpaint strength curve (segments.js, segments.py). */
 #sa3-seg-data, .sa3-seg-old { display: none !important; }
 
-/* audio loaded: our editor replaces gradio's waveform + transport (toolbar, upload / mic stay) */
-.block.sa3seg-on .component-wrapper { display: none !important; }
+/* audio loaded: our editor replaces gradio's waveform + transport and its upload / mic row (the label row's
+   × clears the audio and brings upload back), so the dadaspec gets the space */
+.block.sa3seg-on .component-wrapper, .block.sa3seg-on .source-selection { display: none !important; }
+/* …and its "Reference audio" label row: the accordion title already names it. Gradio's download / × icons
+   (absolute, top-right) then sit at the end of our toolbar, which keeps clear of them; Share is useless locally */
+.block.sa3seg-on > label, .block.sa3seg-on .icon-button-wrapper button[aria-label="Share"] { display: none !important; }
+.block.sa3seg-on > .sa3seg:not(.full) { margin-top: 0; padding: 7px 10px 0; }
+.block.sa3seg-on > .sa3seg:not(.full) .sg-bar { padding-right: 52px; }
+.block.sa3seg-on .icon-button-wrapper { top: 9px !important; right: 6px !important; border: 0 !important; background: transparent !important; box-shadow: none !important; }
 .block:not(.sa3seg-on) > .sa3seg { display: none; }
 
-.sa3seg { --seg: #ff6fb5; --segf: rgba(255,111,181,.2); margin-top: 8px; outline: none; user-select: none;
+.sa3seg { --seg: #ff6fb5; --segf: rgba(255,111,181,.2); margin-top: 4px; outline: none; user-select: none;
   font-family: Inter, -apple-system, sans-serif; }
 .sa3seg-a2a .sg-stage { cursor: text; }   /* viewer: click seeks */
 
-.sa3seg .sg-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-height: 28px; }
+.sa3seg .sg-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; min-height: 28px; flex-wrap: wrap; row-gap: 6px; }
 .sa3seg .sg-play { width: 28px; height: 28px; flex: none; border-radius: 50%; border: 0; cursor: pointer;
   background: linear-gradient(135deg, #8a7bff, #b67cff 50%, #ff6fb5); display: grid; place-items: center;
   box-shadow: 0 2px 10px rgba(155,140,255,.25); transition: transform .12s; }
@@ -26,13 +33,14 @@
 .sa3seg.both .sg-warn { display: inline; flex: 1; min-width: 0; }
 .sa3seg.both .sg-sum { display: none; }
 #sa3-generate[data-sa3both] { opacity: .4; filter: grayscale(.7); cursor: not-allowed; }
-.sa3seg .sg-btn { font-size: 11px; padding: 3px 9px; border-radius: 8px; cursor: pointer; color: #c9c9d6;
+.sa3seg .sg-btn { font-size: 11px; padding: 3px 7px; border-radius: 8px; cursor: pointer; color: #c9c9d6;
   background: #1a1a23; border: 1px solid rgba(255,255,255,.08); transition: background .12s, color .12s; }
 .sa3seg .sg-btn:hover { background: #22222d; color: #fff; }
-.sa3seg:not(.has) .sg-btn { opacity: .45; pointer-events: none; }
+.sa3seg:not(.has) .sg-clr { opacity: .45; pointer-events: none; }
 
 .sa3seg .sg-stage { position: relative; height: 132px; border-radius: 10px; overflow: hidden; cursor: crosshair;
   background: #07070b; border: 1px solid rgba(255,255,255,.07); touch-action: none; }
+.sa3seg-inp .sg-stage { height: clamp(170px, 26vh, 320px); }   /* the curve editor: as tall as the viewport allows */
 .sa3seg:focus-visible .sg-stage, .sa3seg:focus .sg-stage { border-color: rgba(155,140,255,.35); }
 .sa3seg .sg-imgwrap { position: absolute; inset: 0 auto 0 0; }
 .sa3seg .sg-imgwrap img { width: 100%; height: 100%; display: block; object-fit: fill; pointer-events: none; }
@@ -43,27 +51,74 @@
 .sa3seg .sg-len span { position: absolute; top: 4px; left: 5px; font: 600 9.5px "JetBrains Mono", monospace; color: rgba(255,255,255,.7);
   white-space: nowrap; letter-spacing: .02em; }
 
-.sa3seg .sg-s { position: absolute; top: 0; bottom: 0; cursor: grab; background: var(--f, var(--segf));
+/* strength curve: the per-latent-frame values the sampler gets, y = strength (bottom 0, top 1) */
+.sa3seg .sg-curve { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.sa3seg .sg-curve .fill { opacity: .26; }
+.sa3seg .sg-curve .line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; opacity: .95; }
+
+/* plateaus (flat stretches above 0): a box from the floor up to its strength */
+.sa3seg .sg-s { position: absolute; bottom: 0; height: max(26px, calc(var(--u, 1) * 100%)); cursor: grab;
+  background: color-mix(in srgb, var(--c, var(--seg)) 10%, transparent);
   border-left: 1.5px solid var(--c, var(--seg)); border-right: 1.5px solid var(--c, var(--seg));
   box-shadow: inset 0 2px 0 var(--c, var(--seg)); transition: background .12s, box-shadow .12s; }
-.sa3seg .sg-s:hover { background: color-mix(in srgb, var(--c, var(--seg)) 28%, transparent); }
-.sa3seg .sg-s.sel { background: color-mix(in srgb, var(--c, var(--seg)) 32%, transparent);
-  box-shadow: inset 0 2px 0 var(--c, var(--seg)), inset 0 -2px 0 var(--c, var(--seg)), 0 0 0 1px var(--c, var(--seg)), 0 0 18px color-mix(in srgb, var(--c, var(--seg)) 45%, transparent); z-index: 2; }
+.sa3seg .sg-s:hover { background: color-mix(in srgb, var(--c, var(--seg)) 22%, transparent); }
+.sa3seg .sg-s.sel { background: color-mix(in srgb, var(--c, var(--seg)) 26%, transparent);
+  box-shadow: inset 0 2px 0 var(--c, var(--seg)), 0 0 0 1px var(--c, var(--seg)), 0 0 18px color-mix(in srgb, var(--c, var(--seg)) 45%, transparent); z-index: 2; }
 .sa3seg .sg-s.past { opacity: .4; }
 .sa3seg.dragging .sg-s, .sa3seg.dragging .sg-stage { cursor: grabbing; }
 .sa3seg .sg-s .h { position: absolute; top: 0; bottom: 0; width: 9px; cursor: ew-resize; z-index: 1; }
 .sa3seg .sg-s .h.l { left: -5px; }
 .sa3seg .sg-s .h.r { right: -5px; }
+.sa3seg .sg-s .h.t { left: 6px; right: 6px; top: -5px; bottom: auto; width: auto; height: 10px; cursor: ns-resize; }
 .sa3seg .sg-s .h::after { content: ""; position: absolute; top: 50%; left: 3px; width: 3px; height: 22px; margin-top: -11px;
   border-radius: 2px; background: var(--c, var(--seg)); opacity: 0; transition: opacity .12s; }
+.sa3seg .sg-s .h.t::after { top: 3px; left: 50%; width: 22px; height: 3px; margin: 0 0 0 -11px; }
 .sa3seg .sg-s:hover .h::after, .sa3seg .sg-s.sel .h::after { opacity: 1; }
 .sa3seg .sg-s .lab { position: absolute; left: 6px; bottom: 5px; right: 4px; overflow: hidden; white-space: nowrap; text-overflow: clip;
   font: 600 9.5px "JetBrains Mono", monospace; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none; }
 .sa3seg .sg-s .x { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; border-radius: 50%; padding: 0;
   border: 0; cursor: pointer; display: none; place-items: center; font-size: 13px; line-height: 1;
-  background: rgba(10,10,15,.85); color: #fff; }
+  background: rgba(10,10,15,.85); color: #fff; z-index: 2; }
 .sa3seg .sg-s.sel .x { display: grid; }
 .sa3seg .sg-s .x:hover { background: #ff5a6e; }
+
+/* keys */
+.sa3seg .sg-keys { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.sa3seg .sg-k { position: absolute; width: 10px; height: 10px; margin: 0 0 -5px -5px; border-radius: 50%; pointer-events: auto;
+  cursor: move; background: var(--c); border: 2px solid #0b0b10; box-shadow: 0 0 0 1px rgba(255,255,255,.35); transition: transform .1s; }
+.sa3seg .sg-k:hover { transform: scale(1.25); }
+.sa3seg .sg-k.sel { box-shadow: 0 0 0 2px #fff, 0 0 10px var(--c); }
+.sa3seg.pmode .sg-stage { cursor: cell; }
+.sa3seg:not(.pmode) .sg-k.edge { display: none; }   /* Span mode: hard-edge keys are the boxes' corners */
+
+/* toolbar: mode + strength */
+.sa3seg .sg-modes { display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); flex: none; }
+.sa3seg .sg-mode { font-size: 11px; padding: 3px 8px; border: 0; cursor: pointer; color: #8b8b9c; background: #1a1a23; }
+.sa3seg .sg-mode + .sg-mode { border-left: 1px solid rgba(255,255,255,.08); }
+.sa3seg .sg-mode.on { color: #fff; background: #2a2540; }
+.sa3seg .sg-ubox { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 11px; color: #8b8b9c; cursor: default; }
+.sa3seg .sg-u { --uc: #ff6fb5; width: 72px; height: 4px; margin: 0; appearance: none; -webkit-appearance: none; border-radius: 3px; cursor: pointer;
+  background: linear-gradient(90deg, #3ee6c4, #9b8cff, #ff6fb5); }
+.sa3seg .sg-u::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--uc);
+  border: 2px solid #0b0b10; box-shadow: 0 0 0 1px rgba(255,255,255,.4); }
+.sa3seg .sg-uv { font: 600 10.5px "JetBrains Mono", monospace; color: #e4e4ee; min-width: 28px; }
+
+/* full screen (F / the toolbar button; Esc exits): a fixed overlay, the dadaspec fills what's left */
+.sa3seg .sg-full { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; }
+.sa3seg .sg-full svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.sa3seg .sg-full .i, .sa3seg .sg-full span, .sa3seg.full .sg-full .o { display: none; }
+.sa3seg.full .sg-full .i, .sa3seg.full .sg-full span { display: inline; }
+.sa3seg.full .sg-full { color: #fff; background: #2a2540; border-color: rgba(155,140,255,.45); }
+.sa3seg .sg-x { display: none; }
+.sa3seg.full .sg-x { display: grid; place-items: center; position: absolute; top: 12px; right: 14px; width: 28px; height: 28px;
+  padding: 0; border-radius: 50%; cursor: pointer; font-size: 14px; color: #fff; background: #1a1a23;
+  border: 1px solid rgba(255,255,255,.15); z-index: 5; }
+.sa3seg.full .sg-x:hover { background: #ff5a6e; }
+.sa3seg.full { position: fixed; inset: 0; z-index: 2147483000; margin: 0; padding: 16px 56px 10px 22px; background: #0b0b10;
+  display: flex; flex-direction: column; }
+.sa3seg.full .sg-stage { flex: 1 1 auto; height: auto; min-height: 120px; }
+.sa3seg.full .sg-bar { margin-bottom: 10px; }
+html.sa3seg-full, html.sa3seg-full body { overflow: hidden; }
 
 .sa3seg .sg-hov { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid rgba(255,255,255,.35); pointer-events: none; opacity: 0; transition: opacity .1s; }
 .sa3seg .sg-stage:hover .sg-hov, .sa3seg.dragging .sg-hov { opacity: 1; }
@@ -81,5 +136,8 @@
 .sa3seg .sg-ruler span { position: absolute; top: 0; transform: translateX(-50%); font: 500 9.5px "JetBrains Mono", monospace; color: #5b5b6b; }
 .sa3seg .sg-ruler span:first-child { transform: none; }
 .sa3seg .sg-ruler span::before { content: ""; position: absolute; top: -3px; left: 50%; width: 1px; height: 3px; background: #3a3a48; }
-.sa3seg .sg-hint { font-size: 11px; color: #5b5b6b; margin-top: 2px; line-height: 1.45; }
+.sa3seg .sg-foot { display: flex; align-items: center; gap: 8px; margin-top: 1px; }
+.sa3seg .sg-help { flex: none; width: 17px; height: 17px; padding: 0; border-radius: 50%; cursor: help; font: 600 10px Inter, sans-serif;
+  color: #8b8b9c; background: #1a1a23; border: 1px solid rgba(255,255,255,.1); }
+.sa3seg .sg-help:hover { color: #fff; }
 .sa3seg audio { display: none; }

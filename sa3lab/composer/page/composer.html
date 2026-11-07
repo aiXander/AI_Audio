@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA3 Composer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/sa3/ui/tokens.css">
+<link rel="stylesheet" href="/sa3/page/composer/composer.css">
+</head>
+<body>
+<div id="app">
+  <!-- placed by composer.js into the app shell's nav row: #projgrp after the page tabs, #rendergrp + #status on the right -->
+  <div id="projgrp" class="hgrp">
+    <select id="proj" class="ui-input" title="the open project (saved automatically under outputs/composer/)"></select>
+    <button id="new" class="ui-btn small ghost" title="start a new, empty project">+ New</button>
+    <input id="newname" class="ui-input" placeholder="name, Enter" title="letters, digits, - and _ ; Enter creates it, Esc cancels" hidden>
+    <button id="bpmbtn" class="ui-btn small ghost mono" title="the tempo the clips on the tracks agree on (a live estimate, recomputed on every edit): click to see which clips are furthest off">– BPM</button>
+    <div id="bpmpop" class="pop" hidden>
+      <div class="note">A best-effort estimate from every clip with a clear beat, weighted by length and confidence (70 and 140 count as the same tempo). It follows whatever is on the tracks and is never sent to SA3: the model reads the tempo from the audio itself. Clips with "snap to the beat grid" on are stretched onto it.</div>
+      <div id="bpmlist"></div>
+    </div>
+  </div>
+  <div id="rendergrp" class="hgrp">
+    <button id="setbtn" class="ui-btn ghost" title="model, steps, seams, conditioning, takes per render">⚙ Render settings</button>
+    <div id="setpop" class="pop right" hidden>
+      <div class="prow" title="how many takes one click renders, each with its own random seed"><label>Takes per render</label><div class="ctl"><input id="nseeds" class="ui-input num" type="number" min="1" max="16" value="2"></div><span class="note">one random seed each: the seed decides most of what a gap becomes</span></div>
+      <div class="prow"><label>Model</label><div class="ctl"><select id="dit" class="ui-input" title="Medium: the full model (best quality). Small music: faster, rougher"><option value="medium">Medium</option><option value="sm-music">Small music</option></select><input id="steps" class="ui-input num" type="number" min="4" max="16" title="sampler steps: 8 is what the model was distilled for; more is slower and rarely better"><span class="note">steps</span></div><span class="note">8 steps is the default</span></div>
+      <div class="prow" title="beats (seconds for clips without a beat) regenerated each side of every clip edge, so neighbouring clips blend instead of butting"><label>Seams</label><div class="ctl"><select id="seam" class="ui-input"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="4">4</option></select></div><span class="note">beats regenerated around each clip edge, so clips blend instead of butting</span></div>
+      <div class="prow"><label title="what SA3 is told the music is, at each moment">Conditioning</label><div class="ctl"><div id="cond" class="ui-seg">
+          <button data-v="crossfade" title="each clip's own source (its prompt or anarchy conditioning) over that clip, crossfaded across the gaps">Auto</button>
+          <button data-v="global" title="one source for the whole timeline (set it in the Project panel)">One anchor</button>
+          <button data-v="keys" title="your own sources at chosen times, edited on the Conditioning lane">Keypoints</button></div></div>
+        <span id="condnote" class="note"></span></div>
+    </div>
+    <button id="render" class="ui-btn primary" title="render takes of the current timeline in the studio's queue (each lands as a lane under the tracks)">Render</button>
+  </div>
+  <span id="status" class="ui-chip dim" hidden></span>
+  <div id="main">
+    <div id="rail" class="rail" title="show / hide the library (L)"><button id="sidetog" class="ui-btn small ghost">⟨</button><span class="rail-label">Library</span></div>
+    <aside id="side">
+      <div class="side-head"><div class="side-tabs ui-seg"><button data-v="lib" class="on" title="your starred renders: drag a card onto a track">Library</button><button data-v="imp" title="your own audio files, as clips in this project">Imports</button></div>
+</div>
+      <div class="side-hint muted drag-hint">Drag a card onto a track. To take only part of a clip, drag across its spectrogram first, then drag the card.</div>
+      <div id="sidelib"></div>
+      <div id="sideimp" hidden>
+        <div class="side-hint muted">Your own audio as pieces (copied into this project's <span class="mono">imports/</span>, never shared). It has no conditioning of its own: it follows the project's anchor.</div>
+        <label class="ui-btn small" id="upl">Import audio…<input type="file" accept="audio/*" multiple hidden></label>
+        <div id="implist"></div>
+      </div>
+    </aside>
+    <section id="work">
+      <div id="tools">
+        <button id="play" class="ui-btn" title="play / stop from the playhead (space)">▶</button>
+        <select id="src" class="ui-input" title="what ▶ plays. Mix + preview: the live mix, plus a fake of the render: the clips fade into soft noise where the render will rewrite them (gaps, seams, drawn regions), as much as the strength there. Reference: exactly what SA3 keeps"><option value="mixp">Mix + preview</option><option value="mix">Mix</option><option value="ref">Reference</option><option value="take">Selected take</option></select>
+        <span id="clock" class="mono muted" title="playhead / project length">0.0 s</span>
+        <span id="peak" class="mono muted" title="live peak of the mix monitor"></span>
+        <button id="emptywarn" class="ui-chip warn" hidden></button>
+        <span class="grow"></span>
+        <span class="muted hint" title="⌘ / ctrl + scroll (or pinch) zooms at the cursor, scroll pans; View ▾ → Zoom to fit">⌘ scroll: zoom</span>
+        <button id="undo" class="ui-btn small ghost" title="undo (⌘Z)">↶</button>
+        <button id="redo" class="ui-btn small ghost" title="redo (⇧⌘Z)">↷</button>
+        <button id="view" class="ui-btn small ghost" title="extra lanes (conditioning, reference, take), zoom to fit, add time or a track">View ▾</button>
+        <button id="keys" class="ui-btn small ghost" title="keyboard shortcuts (?)">?</button>
+      </div>
+      <div id="mid">
+        <div id="tl"></div>
+        <div id="irail" class="rail" title="show / hide the settings panel (I)"><button id="insptog" class="ui-btn small ghost">⟩</button><span class="rail-label">Settings</span></div>
+        <aside id="insp"></aside>
+      </div>
+    </section>
+  </div>
+</div>
+<script type="module" src="/sa3/page/composer/composer.js"></script>
+</body>
+</html>

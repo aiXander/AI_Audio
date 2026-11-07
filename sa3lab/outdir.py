@@ -137,6 +137,11 @@ def install(demo, persist, spec_fn, render_player, history_size: int = 10) -> No
         @functools.wraps(inner)
         def wrapped(*a, _inner=inner, _present=bf.name != "pregen"):
             *rest, d = a
+            if not _present and "Infinite Radio" not in (rest[15] if len(rest) > 15 and isinstance(rest[15], list) else []):
+                # pregen is its own gradio event, so it runs WHILE the next queued job renders; with
+                # Radio off it renders nothing, and repointing OUTPUT_DIR here would send that
+                # other job's file into this page's folder (rest[15] = upstream's output_opts)
+                return _inner(*rest)
             p = (resolve(d) or (Path(d) if d and Path(d).is_absolute() and os.environ.get("SA3_OUTDIR")
                                 else None) or active())
             p.mkdir(parents=True, exist_ok=True)

@@ -7,10 +7,14 @@ Method, tuned for generated music (steady tempo, no drift):
 1. ffmpeg decodes to mono 22.05 kHz float.
 2. Onset strength = spectral flux of a log-compressed, band-pooled STFT
    (hop 256 ≈ 86 frames/s), minus its 1 s moving average, half-wave rectified.
-3. Autocorrelation of that envelope, read at fractional lags. Every candidate
-   tempo on a 0.1 BPM grid (55-215) is scored by a comb over its beat lag and
-   multiples (1, 2, 3, 4 beats; ½-beat too): the multiples are what give
-   sub-BPM precision from 11.6 ms frames. A broad log-normal prior around
+3. Autocorrelation of that envelope, band-limited (sinc) upsampled to 1/32
+   frame, so it can be read at fractional lags. Every candidate tempo on a
+   0.1 BPM grid (55-215) is scored by a comb over its beat lag and multiples
+   (1, 2, 3, 4 beats; ½-beat too): the multiples are what give sub-BPM
+   precision from 11.6 ms frames. Trap: a *linear* interpolation between
+   integer lags puts a kink wherever beat×m is a whole frame, and the comb's
+   argmax snaps to those kinks (120.0 read as 120.2, 110 as 110.0 exactly,
+   180 as 179.8); upsampling removes them. A broad log-normal prior around
    120 BPM breaks octave ties, as in librosa's tempo estimator.
 4. Confidence = the winning comb's normalized autocorrelation: beat-driven
    renders measured 0.5-0.85, barking dogs / beatless clips < 0.1.
@@ -33,6 +37,7 @@ NFFT = 2048
 FPS = SR / HOP
 BPM_LO, BPM_HI = 55.0, 215.0
 MIN_CONF = 0.2           # periodicity below this: "no clear beat"
+UPS = 32                 # autocorrelation upsampling factor (see step 3)
 
 # match tiers on relative error vs the prompt's BPM (after octave folding)
 GREEN, YELLOW = 0.015, 0.04          # ≤1.5 % (120 → ±1.8 BPM), ≤4 %; else orange
@@ -82,13 +87,15 @@ def estimate(path: str, want: float | None = None) -> dict:
     env = _onset_env(_decode(path))
     env = env - env.mean()
     nfft = 1 << int(np.ceil(np.log2(2 * len(env))))
-    f = np.fft.rfft(env, nfft)
-    ac = np.fft.irfft(f * np.conj(f))[: len(env)]
+    pw = np.abs(np.fft.rfft(env, nfft)) ** 2
+    # zero-padding the power spectrum = sinc interpolation of the autocorrelation
+    keep = min(len(env), int(5 * 60 * FPS / BPM_LO))                  # longest comb lag + margin
+    ac = np.fft.irfft(pw, nfft * UPS)[: keep * UPS]
     ac = ac / (ac[0] + 1e-9)
     lags = np.arange(len(ac))
 
     def at(lag):                                                       # fractional-lag read
-        return np.interp(lag, lags, ac)
+        return np.interp(lag * UPS, lags, ac)
 
     bpms = np.arange(BPM_LO, BPM_HI + 1e-6, 0.1)
     beat = 60.0 * FPS / bpms                                           # beat lag in frames

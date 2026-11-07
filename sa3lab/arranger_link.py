@@ -55,9 +55,12 @@ def settings(path: str, k: int) -> tuple[dict, str]:
          "sigma_max": sig, "prompt": rec.get("prompt") or "", "full": True}
     if rec.get("seed") is not None:
         r["seed"] = int(rec["seed"])
+    if rec.get("cond"):                                # per-section prompts (arranger/server.py section_cond)
+        r["arranger_cond"] = rec["cond"]
     n = len(rec["sigmas"])
     note = (f"Arranger: {rec.get('name', 'sketch')} · {rec['seconds']:g} s · σ {sig:.2f}"
             + (f" (ladder {k + 1}/{n}, seed {rec['seed']})" if n > 1 else "")
+            + (f" · {len(rec['cond']['anchors'])} section prompts" if rec.get("cond") else "")
             + ("" if rec.get("generate") else " · press Generate"))
     return r, note
 

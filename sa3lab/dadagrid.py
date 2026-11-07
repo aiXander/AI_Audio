@@ -5,7 +5,9 @@
     → prints the PNG path; open it with the Read tool.
 
 Same pixels as the studio's spectrogram (`hispec.render_spectrogram_png`), folded to mono
-exactly as `uiprefs.js` does (L and R averaged, bass at the bottom). How to read one:
+exactly as `uiprefs.js` does (L and R averaged, bass at the bottom). Mono on purpose (Xander's
+call): renders are near-symmetric L/R, so one full-height panel shows more detail than the
+mirrored stereo view. How to read one:
 - x = time, every clip stretched to the full width; ticks every 10 s along the label strip.
 - y = mel bins, 0 Hz at the bottom to 16 kHz at the top; brightness = that bin's level
   (−60…0 dB, gamma 0.6).

@@ -1,0 +1,17 @@
+/* SA3 UI kit: design tokens + base components (design: docs/reference/sa3-composer.md 2.1).
+   The studio theme as CSS variables (studio.css / studio.py's gradio theme: violet on near-black,
+   Inter + JetBrains Mono). Every kit page links this file first; page CSS only adds layout.
+   This file = vars.css + components.css + the page-wide base (body, inputs, scrollbars). */
+@import url("/sa3/ui/vars.css");
+@import url("/sa3/ui/components.css");
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
+button, input, select { font: inherit; color: inherit; }
+
+/* scrollbars */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 9px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+[hidden] { display: none !important; }

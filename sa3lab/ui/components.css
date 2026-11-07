@@ -1,0 +1,132 @@
+/* SA3 UI kit: component classes only (no global element rules), so the studio page can load them
+   next to gradio without restyling it (highlights_link.js). Kit pages get them via tokens.css. */
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+/* buttons */
+.ui-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-s);
+  border: 1px solid var(--line-2); background: var(--panel-2); cursor: pointer; white-space: nowrap; user-select: none;
+  transition: background .12s, border-color .12s, color .12s; }
+.ui-btn:hover { background: var(--panel-3); border-color: rgba(255, 255, 255, 0.2); }
+.ui-btn:disabled { opacity: .45; cursor: default; }
+.ui-btn.primary { background: linear-gradient(180deg, #8e7dff, #7464f0); border-color: #9d8fff; color: #fff; font-weight: 600; }
+.ui-btn.primary:hover { background: linear-gradient(180deg, #9d8dff, #7f70f5); }
+.ui-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.ui-btn.ghost:hover { background: var(--panel-3); color: var(--text); }
+.ui-btn.small { height: 22px; padding: 0 7px; font-size: 12px; }
+.ui-btn.on { border-color: var(--accent); color: var(--accent-2); background: var(--accent-bg); }
+.ui-btn svg { width: 14px; height: 14px; }
+
+/* inputs */
+.ui-input { height: 28px; padding: 0 8px; border-radius: var(--r-s); border: 1px solid var(--line-2); background: #0d0d12; outline: none; }
+.ui-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(155, 140, 255, 0.15); }
+.ui-input.num { width: 56px; font-family: var(--mono); font-size: 12px; }
+select.ui-input { padding-right: 4px; }
+
+/* segmented control */
+.ui-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--r-s); overflow: hidden; height: 28px; }
+.ui-seg button { border: 0; background: var(--panel-2); padding: 0 10px; cursor: pointer; color: var(--text-2); }
+.ui-seg button + button { border-left: 1px solid var(--line-2); }
+.ui-seg button.on { background: var(--accent-bg); color: var(--accent-2); }
+.ui-seg button:disabled { opacity: .45; cursor: default; }
+
+/* chips + labels */
+.ui-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 99px;
+  background: var(--panel-3); color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.ui-chip.accent { background: var(--accent-bg); color: var(--accent-2); }
+.ui-chip.warn { background: rgba(255, 184, 107, 0.14); color: var(--warn); }
+.ui-chip.dim { color: var(--muted); }
+.ui-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+/* toast */
+.ui-toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+.ui-toast { max-width: 460px; padding: 9px 12px; border-radius: var(--r-m); background: var(--panel-3); border: 1px solid var(--line-2);
+  box-shadow: var(--shadow); font-size: 12.5px; }
+.ui-toast.err { border-color: rgba(255, 107, 129, 0.5); }
+
+/* app shell (shell.js) */
+.ui-shell { display: flex; align-items: center; gap: 18px; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); background: #0c0c11; }
+.ui-shell .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -0.01em; }
+.ui-shell .brand i { width: 18px; height: 18px; border-radius: 5px; background: linear-gradient(135deg, #a99cff, #5ed1b5); display: inline-block; }
+.ui-shell nav { display: flex; gap: 2px; }
+.ui-shell nav a { padding: 6px 10px; border-radius: var(--r-s); color: var(--text-2); text-decoration: none; }
+.ui-shell nav a:hover { background: var(--panel-2); color: var(--text); }
+.ui-shell nav a.on { color: var(--accent-2); background: var(--accent-bg); }
+.ui-shell .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.ui-shell .q { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.ui-shell .q .bar { width: 90px; height: 4px; border-radius: 4px; background: var(--panel-3); overflow: hidden; }
+.ui-shell .q .bar b { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+/* inside the tab host (app.js): the host's brand + tabs sit over this gap; the page's widgets follow */
+.ui-shell.embedded .hostgap { flex: none; width: var(--sa3-host-left, 330px); }
+
+/* icons (icons.js) */
+.ui-icon { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+.ui-btn.danger { border-color: rgba(255, 107, 129, 0.45); color: #ffb3bf; }
+.ui-btn.danger:hover { background: rgba(255, 107, 129, 0.14); }
+.ui-chip.hl { background: rgba(255, 212, 121, 0.14); color: #ffd479; }
+.ui-chip.ok { background: rgba(126, 226, 160, 0.13); color: var(--ok); }
+.ui-chip.bad { background: rgba(255, 107, 129, 0.14); color: var(--danger); }
+
+/* modal (modal.js) */
+.ui-modal-back { position: fixed; inset: 0; background: rgba(4, 4, 8, 0.62); backdrop-filter: blur(3px); z-index: 60; display: flex; align-items: center; justify-content: center; }
+.ui-modal { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-l); box-shadow: var(--shadow); }
+.ui-modal.wide { width: min(880px, calc(100vw - 32px)); }
+.ui-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; font-size: 14px; }
+.ui-modal-body { padding: 4px 14px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.ui-modal-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.ui-modal textarea.ui-input { height: auto; width: 100%; box-sizing: border-box; padding: 6px 8px; resize: vertical; }
+
+/* menu (menu.js) */
+.ui-menu { position: fixed; z-index: 70; min-width: 180px; padding: 4px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-m); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.ui-menu button { display: flex; justify-content: space-between; gap: 12px; text-align: left; padding: 6px 9px; border: 0; background: none; border-radius: var(--r-s); cursor: pointer; color: var(--text); }
+.ui-menu button:hover:not(:disabled) { background: var(--accent-bg); }
+.ui-menu button:disabled { opacity: .4; cursor: default; }
+.ui-menu button.danger { color: #ffb3bf; }
+.ui-menu button i { font-style: normal; color: var(--muted); font-size: 11px; }
+.ui-menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+/* tag input (taginput.js) */
+.ui-tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-height: 30px; padding: 3px 5px; border: 1px solid var(--line-2); border-radius: var(--r-s); background: #0d0d12; }
+.ui-tags .ui-chip b { cursor: pointer; margin-left: 2px; opacity: .7; }
+.ui-tags-in { flex: 1; min-width: 90px; border: 0; background: none; outline: none; height: 22px; }
+
+/* keyboard help (shortcuts.js) */
+.ui-keys { position: fixed; right: 16px; top: 56px; z-index: 65; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-m); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; min-width: 260px; }
+.ui-keys div { display: flex; gap: 10px; align-items: center; }
+.ui-keys kbd { min-width: 64px; font-family: var(--mono); font-size: 11px; color: var(--accent-2); }
+
+/* clip card (clipcard.js) */
+.ui-card { padding: 8px; border-radius: var(--r-m); background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 5px; }
+.ui-card:hover { border-color: var(--line-2); }
+.ui-card.picked { border-color: rgba(196, 187, 255, 0.45); }
+.ui-card .t { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ui-card .meta { display: flex; gap: 4px; flex-wrap: wrap; }
+.ui-card .acts { display: flex; align-items: center; gap: 4px; }
+.ui-card .acts .r { font-size: 11px; color: var(--text-2); margin-right: auto; }
+
+/* browser (browser.js) */
+.ui-browser { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.ui-browser .bar, .ui-browser .sortbar { display: flex; gap: 6px; align-items: center; padding: 8px 10px 4px; }
+.ui-browser .bar .q { flex: 1; min-width: 80px; }
+.ui-browser .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 10px; font-size: 12px; }
+.ui-browser .filters[hidden] { display: none; }
+.ui-browser .lbl { font-size: 11px; color: var(--muted); }
+.ui-browser .sortbar .grow { flex: 1; }
+.ui-browser .sortbar select { height: 24px; font-size: 12px; }
+.ui-browser .ui-seg { height: 24px; font-size: 12px; }
+.ui-browser .body { flex: 1; overflow-y: auto; padding: 6px 10px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; align-content: start; }
+.ui-browser.compact .body { grid-template-columns: 1fr; }
+.ui-browser .body .empty, .ui-browser .body .lassoed { grid-column: 1 / -1; padding: 8px 2px; }
+.ui-browser .map { grid-column: 1 / -1; position: relative; height: min(70vh, 640px); }
+.ui-browser.compact .map { height: 360px; }
+.ui-browser .map canvas { width: 100%; height: 100%; border-radius: var(--r-m); display: block; cursor: crosshair; }
+.ui-browser .map .tip { position: absolute; pointer-events: none; padding: 4px 8px; border-radius: var(--r-s); background: rgba(9, 9, 13, 0.9); font-size: 12px; max-width: 320px; }
+.ui-browser .map .legend { position: absolute; left: 10px; bottom: 8px; font-size: 11px; }
+
+/* highlight modal (highlight.js) */
+.ui-hl canvas.zoom { width: 100%; height: 150px; border-radius: var(--r-m); cursor: ew-resize; display: block; }
+.ui-hl .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ui-hl .row .grow { flex: 1; }
+.ui-hl .io { font-size: 12px; color: var(--text-2); }
+
+/* the hidden attribute wins over every component display rule */
+.ui-btn[hidden], .ui-chip[hidden], .ui-card [hidden], .ui-browser [hidden], .ui-modal [hidden] { display: none !important; }

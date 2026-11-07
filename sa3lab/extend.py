@@ -5,7 +5,8 @@ masks), so a continuation is an inpaint job: Length = clip + N s, reference audi
 clip itself (upstream zero-pads a reference shorter than Length), range = [clip − redo,
 new length]. `redo` regenerates the clip's last seconds too, so a clip that already fades
 out gets a new ending instead of a continuation of the fade. Everything else (prompt or
-anarchy spec, seed, model, steps, LoRAs) comes from the clip's own settings, and with
+anarchy spec, seed, model, steps, LoRAs; a composer take's anchors + weight curves, the tail
+holding their final mix: segments.restore_value) comes from the clip's own settings, and with
 noise.py's fixed canvas the same seed gives the kept span exactly the noise that made it.
 
 Flow (no new gradio event): extend.js asks the studio's restore-settings path for

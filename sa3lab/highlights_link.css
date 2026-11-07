@@ -1,0 +1,2 @@
+/* Highlight bands + range drag over history-row dadaspecs (highlights_link.js) */
+.sa3-hlcv { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }

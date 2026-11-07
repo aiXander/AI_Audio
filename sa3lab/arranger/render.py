@@ -32,8 +32,9 @@ Template schema (v1; presets.py has full examples; missing keys take LANE_DEFAUL
      "master": {"leveler": 0..1 (slow 2:1-ish loudness leveler, see _leveler)},
      "sa3": {"init_noise": 0.8, "ladder": [0.55, 0.7, 0.8, 0.9]}}
 A curve is a number or a list of evenly spaced breakpoints across the clip ([a, b] = ramp).
-Generators and their params: compose.py. Section `hint`s are v1 metadata (the joined hints
-are offered as the prompt); real per-section conditioning is a v2 item.
+Generators and their params: compose.py. Section `hint`s are real conditioning when sent to SA3:
+each section's anchor is the send's prompt + its hint, crossfading over a beat at the boundaries
+(server.py section_cond → the box's "cond", condmix.py); the joined hints are still offered as the prompt.
 Length = sum of section bars, padded up to a whole second (SA3's Length is an integer).
 """
 from __future__ import annotations

@@ -1,0 +1,116 @@
+/* Composer page layout (components come from /sa3/ui/tokens.css). Full width, full height. */
+body { display: flex; flex-direction: column; overflow: hidden; }
+#app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+/* header groups, placed by composer.js into the app shell's nav row: #projgrp after the page tabs, #rendergrp on the right */
+.hgrp { display: flex; align-items: center; gap: 8px; position: relative; }
+#projgrp { margin-left: 8px; padding-left: 14px; border-left: 1px solid var(--line); }
+#projgrp .ui-input, #rendergrp .ui-input { height: 26px; font-size: 12.5px; }
+#proj { max-width: 200px; }
+#status[hidden] { display: none; }
+/* popovers (BPM, Render settings): anchored under the header, closed by a click elsewhere or Esc */
+.pop { position: absolute; top: calc(100% + 4px); z-index: 30; width: 340px; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r-m); box-shadow: 0 12px 32px rgba(0,0,0,.45); font-size: 12.5px; }
+.pop[hidden] { display: none; }
+/* fixed to the viewport, so the header's live chips (building…, the queue) never move it */
+.pop.right { position: fixed; top: 48px; right: 12px; width: 420px; }
+.pop .row { display: flex; gap: 6px; }
+.pop .note { font-size: 11.5px; color: var(--muted); }
+.pop .prow { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 4px 8px; width: 100%; justify-self: stretch; align-self: stretch; }
+.pop .prow > label { color: var(--text-2); }
+.pop .prow > .note { grid-column: 2; min-height: 2.6em; }
+.pop .prow .ctl { display: flex; align-items: center; gap: 6px; }
+#bpmlist { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
+#bpmlist .brow { display: grid; grid-template-columns: 10px 1fr auto 52px; gap: 8px; align-items: center; padding: 4px 6px; border-radius: var(--r-s); cursor: pointer; font-size: 12px; }
+#bpmlist .brow:hover { background: var(--panel); }
+#bpmlist .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+#bpmlist .dv { text-align: right; color: var(--muted); }
+#bpmlist .dot { width: 8px; height: 8px; border-radius: 9px; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--danger); } .dot.na { background: var(--dim); }
+.pop .ui-input.num { width: 64px; }
+
+#main { flex: 1; display: flex; min-height: 0; }
+#side { width: 340px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #0d0d12; min-height: 0; }
+.side-head { display: flex; align-items: center; justify-content: space-between; margin: 10px 10px 0; }
+#side[hidden] { display: none; }
+/* the panel toggles (library left, settings right): one fixed spot each, open or closed */
+.rail { flex: none; width: 28px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 10px;
+  border-right: 1px solid var(--line); background: #0b0b10; cursor: pointer; }
+#irail { border-right: 0; border-left: 1px solid var(--line); }
+.rail .ui-btn { width: 22px; height: 26px; padding: 0; justify-content: center; }
+.rail .rail-label { writing-mode: vertical-rl; font: 500 12px var(--font); letter-spacing: .04em; color: var(--text-2); display: none; }
+.rail.closed .rail-label { display: block; }
+.rail.closed:hover { background: var(--panel); }
+#insp[hidden] { display: none; }
+#tools .hint { font-size: 11.5px; }
+#sidelib { flex: 1; min-height: 0; }
+#sidelib[hidden], #sideimp[hidden] { display: none; }
+#sideimp { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.side-hint { font-size: 12px; }
+#implist { display: flex; flex-direction: column; gap: 8px; }
+
+#work { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#tools { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#tools .sep { width: 1px; height: 18px; background: var(--line-2); }
+#tools .grow { flex: 1; }
+#tools .ui-seg { height: 24px; font-size: 12px; }
+#tools #play { width: 34px; padding: 0; justify-content: center; }
+#tools #src { height: 26px; font-size: 12px; width: 130px; }
+#rendergrp { margin-right: 6px; }
+#rendergrp .ui-btn.primary { height: 30px; }
+#clock { min-width: 64px; font-size: 12px; }
+#peak { min-width: 70px; font-size: 11.5px; }
+#peak.hot { color: var(--danger); }
+#mid { flex: 1; display: flex; min-height: 0; }
+#tl { flex: 1; min-height: 240px; position: relative; padding: 6px 0 4px; min-width: 0; }
+#tl.drop { box-shadow: inset 0 0 0 2px rgba(155, 140, 255, 0.5); }
+
+#insp { width: 330px; flex: none; border-left: 1px solid var(--line); background: #0d0d12; overflow-y: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+#insp h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+#insp h4 { margin: 6px 0 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+#insp h4 .grow { flex: 1; }
+#insp .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#insp .row > label { min-width: 54px; color: var(--text-2); font-size: 12px; }
+#insp .row input[type=range] { flex: 1; min-width: 80px; accent-color: var(--accent); }
+#insp .row .v { font-family: var(--mono); font-size: 11px; color: var(--text-2); min-width: 54px; text-align: right; }
+#insp .ui-input { height: 24px; font-size: 12px; }
+#insp .ui-input.num { width: 64px; }
+#insp textarea.ui-input { height: auto; width: 100%; padding: 5px 7px; resize: vertical; font-family: var(--mono); font-size: 11.5px; }
+#insp .src { font-size: 11.5px; color: var(--text-2); word-break: break-all; }
+#insp canvas.eq { width: 100%; height: 70px; background: #0b0b10; border-radius: var(--r-s); display: block; }
+#insp .issue { display: flex; gap: 6px; align-items: flex-start; padding: 5px 6px; border-radius: var(--r-s); background: var(--panel); cursor: pointer; font-size: 12px; }
+#insp .issue:hover { background: var(--panel-2); }
+#insp .dot { width: 8px; height: 8px; border-radius: 9px; flex: none; margin-top: 4px; }
+#insp .dot.ok { background: var(--ok); } #insp .dot.warn { background: var(--warn); } #insp .dot.bad { background: var(--danger); } #insp .dot.na { background: var(--dim); }
+#insp .dims { display: grid; grid-template-columns: 70px 1fr; gap: 3px 8px; font-size: 11.5px; }
+#insp .dims span:nth-child(odd) { color: var(--muted); display: flex; align-items: center; gap: 5px; }
+#insp .meter { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
+#insp .note { font-size: 11.5px; color: var(--muted); }
+#insp .chips { display: flex; gap: 5px; flex-wrap: wrap; }
+/* collapsible inspector sections (open state remembered per section) */
+#insp details.sec { border-top: 1px solid var(--line); padding-top: 8px; }
+#insp details.sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--text); }
+#insp details.sec > summary::-webkit-details-marker { display: none; }
+#insp details.sec > summary::before { content: "▸"; color: var(--muted); font-size: 10px; width: 10px; }
+#insp details.sec[open] > summary::before { content: "▾"; }
+#insp details.sec > summary .badge { margin-left: auto; font-size: 11px; color: var(--muted); font-weight: 400; }
+#insp details.sec > summary .badge.warn { color: var(--warn); }
+#insp details.sec > .body { display: flex; flex-direction: column; gap: 9px; padding: 9px 0 4px; }
+#insp ol.steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; color: var(--text-2); font-size: 12.5px; line-height: 1.45; }
+#insp ol.steps b { color: var(--text); font-weight: 600; }
+/* the side panel's library: search + filters only (map, sort and similar-mode live on the Library page) */
+#side .ui-browser .vw, #side .ui-browser .sortbar .lbl, #side .ui-browser .sortbar .sort, #side .ui-browser .sortbar .md { display: none; }
+
+#insp .takesv { margin-top: 2px; }
+#insp .ui-chip.base { color: var(--keep); background: rgba(94, 209, 181, 0.12); }
+#insp .note.warn { color: var(--warn); }
+#insp .ui-btn.play.on { color: var(--accent); border-color: var(--accent); }
+.star.on { color: #ffd479; }
+/* library cards are dragged onto a track (no Add button here) */
+.drag-hint { margin: 8px 10px 0; font-size: 11.5px; line-height: 1.4; }
+#side .ui-card { cursor: grab; }
+#side .ui-card:active { cursor: grabbing; }
+#side .ui-card .sv { cursor: crosshair; }
+#side .ui-card button, #side .ui-card select { cursor: pointer; }
+#emptywarn { cursor: pointer; border: 0; font-size: 12px; }
+#emptywarn[hidden] { display: none; }

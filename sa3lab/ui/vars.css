@@ -1,0 +1,33 @@
+/* SA3 UI kit: design tokens (the studio theme as CSS variables). Loaded by tokens.css; the studio
+   page loads it directly next to components.css (studio addons that show kit modals / menus). */
+:root {
+  color-scheme: dark;
+  --bg: #09090d;
+  --panel: #111117;
+  --panel-2: #16161e;
+  --panel-3: #1d1d27;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-2: rgba(255, 255, 255, 0.13);
+  --text: #e8e8f0;
+  --text-2: #b9b9c8;
+  --muted: #8b8b9c;
+  --dim: #5d5d6c;
+  --accent: #a99cff;
+  --accent-2: #c4bbff;
+  --accent-bg: rgba(155, 140, 255, 0.14);
+  --gen: #9b8cff;            /* frames SA3 generates (gaps, seams, gen regions) */
+  --keep: #5ed1b5;           /* kept frames / pieces */
+  --new: #3fc6c0;            /* the studio's teal "new / unplayed" tint */
+  --warn: #ffb86b;
+  --danger: #ff6b81;
+  --ok: #7ee2a0;
+  --r-s: 6px;
+  --r-m: 10px;
+  --r-l: 14px;
+  --gap-s: 6px;
+  --gap-m: 10px;
+  --gap-l: 16px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --font: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}

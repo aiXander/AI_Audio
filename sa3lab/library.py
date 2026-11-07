@@ -43,6 +43,12 @@ FastAPI app (so a score click never waits behind a running render in the queue):
     GET  /sa3/library               → every render as a filterable row (Library modal)
     GET  /sa3/spec?name=  /sa3/audio?name=   its spectrogram jpeg / audio file
 
+**Render ids.** `name` is a bare filename in the active folder (OUT_DIR), so the studio page is
+untouched. Every route above that takes a render (label GET/POST, settings, star, spec, audio)
+also takes `id` (query, or a JSON key on POSTs): the render's path relative to outputs/ with
+symlinks resolved (render_id / resolve_id), so pages that show renders from many folders (the
+composer, the starred set) address them without switching the view. Library rows carry `id`.
+
 and the progress estimate: a render's expected duration is predicted from past
 renders' measured timings (sampling cost per step × latent frame, doubled with
 CFG ≠ 1; decode cost per latent frame; text encoder), then corrected live by the
@@ -82,9 +88,43 @@ def init(up) -> None:
     threading.Thread(target=_tempo_worker, name="sa3-tempo", daemon=True).start()
 
 
+# ── render ids: one name for a render across every output folder ───────────
+OUTPUTS = (Path(__file__).resolve().parents[1] / "outputs").resolve()
+
+
+def render_id(path) -> str | None:
+    """A render's id: its original's path relative to outputs/, symlinks resolved (a starred/
+    link maps to the render it points at), e.g. `anarchy/session-3/foo.mp3`. None outside."""
+    try:
+        return str(Path(path).resolve().relative_to(OUTPUTS))
+    except (ValueError, OSError):
+        return None
+
+
+def resolve_id(rid: str | None) -> Path | None:
+    """Render id → its audio file. Sandboxed like outdir.py: inside outputs/, never deleted/
+    or hidden folders, audio files only."""
+    if not rid:
+        return None
+    p = (OUTPUTS / str(rid).lstrip("/")).resolve()
+    try:
+        parts = p.relative_to(OUTPUTS).parts
+    except ValueError:
+        return None
+    if any(x == "deleted" or x.startswith(".") for x in parts[:-1]):
+        return None
+    if p.suffix.lower() not in AUDIO_EXT or not p.is_file():
+        return None
+    return p
+
+
 # ── sidecar I/O ────────────────────────────────────────────────────────────
-def _audio_path(name: str) -> Path | None:
-    """A render's audio path from its bare filename, refusing anything outside OUT_DIR."""
+def _audio_path(name) -> Path | None:
+    """A render's audio path from its bare filename, refusing anything outside OUT_DIR. A Path
+    passes through: the routes resolve `?id=` (resolve_id) to one before calling in, so every
+    function below works on renders in any folder ("name" keeps meaning the active folder)."""
+    if isinstance(name, Path):
+        return name
     name = os.path.basename(name or "")
     p = OUT_DIR / name
     if not name or p.suffix.lower() not in AUDIO_EXT or not p.is_file():
@@ -150,9 +190,10 @@ def restore_settings(name: str) -> dict | None:
     g = d.get("gen")
     an = {"anarchy": d["anarchy"]} if d.get("anarchy") else {}   # latent renders (anarchy_ui.py)
     if g:
-        def inp(x):
+        def inp(x):              # archived under the view folder of its render time: try both
             rel = (x or {}).get("archived")
-            return str(OUT_DIR / rel) if rel and (OUT_DIR / rel).is_file() else None
+            hit = next((b / rel for b in (OUT_DIR, p.resolve().parent) if rel and (b / rel).is_file()), None)
+            return str(hit) if hit else None
         return {k: g[k] for k in ("dit", "decoder", "prompt", "negative_prompt", "seed", "seconds",
                                   "steps", "cfg", "apg", "sigma_max", "mode", "inpaint_range_sec")
                 if k in g} | {"negative_prompt": g.get("negative_prompt", ""), "loras": g.get("loras") or [], "a2a_audio": inp(g.get("a2a_audio")),
@@ -172,7 +213,7 @@ def restore_settings(name: str) -> dict | None:
 
 
 # ── auto BPM tag: measured tempo vs the prompt's (tempo.py) ────────────────
-TEMPO_V = 1                        # bump to re-analyse every render
+TEMPO_V = 2                        # bump to re-analyse every render (2: kink-free BPM, tempo.py step 3)
 _tq: "queue.Queue[Path]" = queue.Queue()
 _tq_seen: set[str] = set()
 
@@ -251,7 +292,8 @@ def write_label(name: str, score=..., tags=..., played=False) -> dict | None:
 
 
 STAR_DIR = Path(__file__).resolve().parents[1] / "outputs" / "starred"
-_STAR_EXT = ("", ".json", ".cond.npz")      # audio, sidecar, latent conditioning (anarchy_ui.py)
+_STAR_EXT = ("", ".json", ".cond.npz", ".conds.npz")   # audio, sidecar, latent conditioning (anarchy_ui.py),
+                                                          # a multi-anchor render's bank (condsrc.py)
 
 
 def _unstar_links(real: Path) -> None:
@@ -334,8 +376,10 @@ def star_render(name: str, on: bool) -> bool | None:
 
 
 def delete_render(name: str) -> bool:
-    """Trash button: score the clip 0, stamp label.deleted, move audio + sidecar into
-    OUT_DIR/deleted/. Reversible by moving the two files back."""
+    """Trash button: score the clip 0, stamp label.deleted, move audio + sidecar (+ its
+    `.cond.npz` / `.conds.npz`) into OUT_DIR/deleted/. Reversible by moving the files back.
+    condsrc.py reads a trashed render's conditioning from there, so projects that used it
+    keep rendering."""
     p = _audio_path(name)
     if p is None:
         return False
@@ -359,9 +403,10 @@ def delete_render(name: str) -> bool:
             stem = f"{p.stem}.{i}{p.suffix}"
             i += 1
         shutil.move(str(sc), str(dst / (stem + ".json")))
-        latent = p.with_name(p.name + ".cond.npz")         # anarchy_ui.py: a latent render's conditioning
-        if latent.exists():
-            shutil.move(str(latent), str(dst / (stem + ".cond.npz")))
+        for ext in (".cond.npz", ".conds.npz"):           # a latent render's conditioning (anarchy_ui.py),
+            side = p.with_name(p.name + ext)              # a multi-anchor render's bank (condsrc.py): kept
+            if side.exists():                             # beside it, so takes that used it still resolve
+                shutil.move(str(side), str(dst / (stem + ext)))
         shutil.move(str(p), str(dst / stem))
     _rows.pop(p.name, None)
     _rows.pop(name, None)
@@ -647,7 +692,7 @@ def library_rows() -> list[dict]:
         except Exception:
             d = {}
         g, lab = d.get("gen") or {}, d.get("label") or {}
-        row = {"name": p.name, "ts": d.get("ts") or p.stat().st_mtime,
+        row = {"name": p.name, "id": render_id(p), "ts": d.get("ts") or p.stat().st_mtime,
                "prompt": g.get("prompt", d.get("prompt")) or "",
                "dit": g.get("dit", d.get("dit")), "seed": g.get("seed", d.get("seed")),
                "seconds": g.get("seconds"), "steps": g.get("steps"), "cfg": g.get("cfg", d.get("cfg")),
@@ -679,8 +724,11 @@ def install_routes() -> None:
     """Add /sa3/* routes to every gradio app gradio builds (ahead of its catch-alls)."""
     from gradio import routes
 
-    async def label_get(name: str):
-        r = read_label(name)
+    def ref(name, rid):             # ?id= (any folder) wins over ?name= (the active folder)
+        return resolve_id(rid) if rid else name
+
+    async def label_get(name: str = "", id: str = ""):
+        r = read_label(ref(name, id))
         return JSONResponse(r if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
@@ -693,18 +741,18 @@ def install_routes() -> None:
             kw["tags"] = d["tags"]
         if d.get("played"):
             kw["played"] = True
-        r = write_label(d.get("name", ""), **kw)
+        r = write_label(ref(d.get("name", ""), d.get("id")), **kw)
         return JSONResponse(r if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
-    def settings_get(name: str):     # sync: legacy renders probe the clip length with ffprobe
-        r = restore_settings(name)
+    def settings_get(name: str = "", id: str = ""):   # sync: legacy renders probe the length with ffprobe
+        r = restore_settings(ref(name, id))
         return JSONResponse(r if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
     async def star_post(request: Request):     # POST /sa3/star {name, starred}
         d = await request.json()
-        r = star_render(d.get("name", ""), bool(d.get("starred")))
+        r = star_render(ref(d.get("name", ""), d.get("id")), bool(d.get("starred")))
         return JSONResponse({"starred": r} if r is not None else {"error": "unknown file"},
                             status_code=200 if r is not None else 404)
 
@@ -721,13 +769,13 @@ def install_routes() -> None:
     def library_get():               # sync: runs in the threadpool (disk reads)
         return JSONResponse(library_rows())
 
-    def spec_get(name: str):
-        b = spec_jpeg(name)
+    def spec_get(name: str = "", id: str = ""):
+        b = spec_jpeg(ref(name, id))
         return (Response(b, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
                 if b else JSONResponse({"error": "no spectrogram"}, status_code=404))
 
-    def audio_get(name: str):
-        p = _audio_path(name)
+    def audio_get(name: str = "", id: str = ""):
+        p = _audio_path(ref(name, id))
         return FileResponse(p) if p else JSONResponse({"error": "unknown file"}, status_code=404)
 
     orig = routes.App.create_app
