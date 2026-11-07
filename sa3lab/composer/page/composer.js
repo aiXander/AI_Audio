@@ -270,8 +270,11 @@ function trackItems(k) {
   return items;
 }
 // ── crossfades: back-to-back clips on a track (compose.transitions resolves them: default 0.5 s,
-// clamped to `max`, the source audio both clips have past the join). Each gets a ⟷ handle on the
-// crossfade's right edge (the join itself for a hard cut): drag it, both edges move symmetrically;
+// clamped to `max`, the source audio the clips have past the join). Centred on the join when both
+// clips have audio to spare, else shifted toward the one that does (xfSplit): a take dropped onto its
+// source clips has nothing past its own edges, so its fades lie inside it, the source clip running on
+// under it, applied with no click. Each gets a ⟷ handle on the edge that moves most (the right one
+// for a centred fade; the join itself for a hard cut): drag it to change the length (xfFromEdge);
 // click / right-click: the options. Stored on the later clip as `xfade: {len, shape}`. Joins, lengths
 // and curves are computed here (`joins`, mirroring compose.transitions), so they follow every edit at once.
 const cutOf = (g) => g.src_cut || g.src;
@@ -279,7 +282,9 @@ function continues(ga, gb) {                 // compose.continues: b carries a's
   return ga.id === gb.id && Math.abs((ga.stretch || 1) - (gb.stretch || 1)) <= 1e-4 && Math.abs(cutOf(ga)[1] - cutOf(gb)[0]) < 5e-3;
 }
 // every back-to-back join on the tracks, worked out here from the clips (compose.transitions' rule, so
-// the page never waits for a build): [{a, b, track, t, len, max, shape}]
+// the page never waits for a build): [{a, b, track, t, len, max, shape, H, T, l0, l1, side}]; H / T:
+// the audio B has before its cut / A past its cut (each capped by the other clip's length), l0 / l1:
+// the fade's seconds before / after the join, side: its handle's edge (1 right, -1 left)
 function joins() {
   const out = [], act = activeIdx().map((pi) => ({ pi, g: geom(pi) }));
   for (const k of new Set(act.map((x) => x.g.track))) {
@@ -288,12 +293,13 @@ function joins() {
       const A = row[i], B = row[i + 1], ga = A.g, gb = B.g;
       if (Math.abs(ga.at + ga.dur - gb.at) > XF_TOL || continues(ga, gb)) continue;
       const lenA = ga.src_len || (rowOf(ga.id) || {}).seconds || cutOf(ga)[1];
-      const tail = (lenA - cutOf(ga)[1]) / (ga.stretch || 1), head = cutOf(gb)[0] / (gb.stretch || 1);
-      const max = Math.max(0, Math.min(2 * tail, 2 * head, ga.dur, gb.dur));
+      const T = Math.min(gb.dur, Math.max(0, (lenA - cutOf(ga)[1]) / (ga.stretch || 1))), H = Math.min(ga.dur, cutOf(gb)[0] / (gb.stretch || 1));
+      const max = Math.max(0, Math.min(T + H, ga.dur, gb.dur));
       if (max < 0.02) continue;
       const set = pieces()[B.pi].xfade || {};
-      out.push({ a: A.pi, b: B.pi, track: k, t: gb.at, max, shape: set.shape === "lin" ? "lin" : "eq",
-        len: set.len != null ? xfClamp(+set.len, max) : Math.min(XF_DEFAULT, max) });
+      const len = set.len != null ? xfClamp(+set.len, max) : Math.min(XF_DEFAULT, max), [l0, l1] = xfSplit(len, H, T);
+      const [m0, m1] = xfSplit(max, H, T);
+      out.push({ a: A.pi, b: B.pi, track: k, t: gb.at, max, shape: set.shape === "lin" ? "lin" : "eq", len, H, T, l0, l1, side: m1 >= m0 ? 1 : -1 });
     }
   }
   return out;
@@ -306,21 +312,33 @@ const XF_TOL = 0.03;                         // compose.XF_TOL
 const XF_DEFAULT = 0.5;                      // compose.XF_DEFAULT
 const xfClamp = (w, mx) => (w < 0.02 ? 0 : +Math.min(mx, w).toFixed(3));
 const xfTxt = (w) => (w < 0.02 ? "hard cut" : (w < 1 ? `${Math.round(w * 1000)} ms` : `${w.toFixed(2)} s`) + (beat() ? ` · ${(w / beat()).toFixed(2)} beats` : ""));
+// a crossfade of len s around its join → [seconds before it, seconds after it]: centred when both
+// sides allow, else pushed toward the side with audio (compose.xf_split)
+function xfSplit(len, H, T) { const after = Math.min(T, Math.max(len / 2, len - H)); return [len - after, after]; }
+const xfEdge = (x, len) => { const [l0, l1] = xfSplit(len, x.H, x.T); return x.side > 0 ? x.t + l1 : x.t - l0; };
+function xfFromEdge(x, p) {                  // the length whose handle edge sits at p (both edges only grow with len)
+  const d = x.side > 0 ? p - x.t : x.t - p;
+  if (d <= 0) return 0;
+  let lo = 0, hi = x.max;
+  if (x.side * (xfEdge(x, hi) - x.t) <= d) return x.max;
+  for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (x.side * (xfEdge(x, m) - x.t) < d) lo = m; else hi = m; }
+  return xfClamp(hi, x.max);
+}
 function xfLen(x) {                          // its length, with a handle drag in flight applied
   const d = tl.drag;
-  return d && d.kind === "marker" && d.p && d.m.xf && d.m.xf.b === x.b ? xfClamp(2 * (d.p[0] - x.t), x.max) : x.len;
+  return d && d.kind === "marker" && d.p && d.m.xf && d.m.xf.b === x.b ? xfFromEdge(x, d.p[0]) : x.len;
 }
 function xfMarkers(k) {
-  return liveXf(k).map((x) => ({ id: "x" + x.b, xf: x, t: x.t + x.len / 2, shape: "fade", free: true, color: "#5ed1b5",
+  return liveXf(k).map((x) => ({ id: "x" + x.b, xf: x, t: xfEdge(x, x.len), shape: "fade", free: true, color: "#5ed1b5",
     tip: `${x.len ? "Crossfade " + xfTxt(x.len) + (x.shape === "lin" ? " (linear)" : "") : "Hard cut"}: ${nameOf(pieces()[x.a].id)} → ${nameOf(pieces()[x.b].id)}`
-      + `\nlongest possible: ${xfTxt(x.max)} (the source audio both clips have past this edge)`
-      + `\ndrag this edge → : longer · ← : shorter (onto the join: a hard cut, where SA3 re-renders the seam)\nclick: lengths + curve` }));
+      + `\nlongest possible: ${xfTxt(x.max)} (the source audio the clips have past this edge${Math.abs(x.l0 - x.l1) > 1e-3 ? "; only one side has it, so the fade sits on that side" : ""})`
+      + `\ndrag this edge ${x.side > 0 ? "→ : longer · ← : shorter" : "← : longer · → : shorter"} (onto the join: a hard cut, where SA3 re-renders the seam)\nclick: lengths + curve` }));
 }
 function drawXf(g, r, t, k) {
   const d = tl.drag;
   for (const x of liveXf(k)) {
-    const w = xfLen(x), live = d && d.kind === "marker" && d.m.xf && d.m.xf.b === x.b;
-    const a = t.x(x.t - w / 2), b = t.x(x.t + w / 2), top = r.y + 18, bot = r.y + r.h - 4;
+    const w = xfLen(x), live = d && d.kind === "marker" && d.m.xf && d.m.xf.b === x.b, [w0, w1] = xfSplit(w, x.H, x.T);
+    const a = t.x(x.t - w0), b = t.x(x.t + w1), top = r.y + 18, bot = r.y + r.h - 4;
     if (b < r.x || a > r.x + r.w) continue;
     if (w > 0 && b - a > 2) {
       g.fillStyle = "rgba(9,9,13,0.4)"; g.fillRect(a, r.y + 17, b - a, r.h - 19);   // below the ⟷ pill (over() paints after markers)
@@ -342,7 +360,7 @@ function drawXf(g, r, t, k) {
     if (live) {
       const s = w ? `crossfade ${xfTxt(w)}${w >= x.max - 1e-3 ? " (longest)" : ""}` : "hard cut";
       g.font = "600 10.5px Inter"; g.textBaseline = "top";
-      const tw = g.measureText(s).width + 8, lx = Math.min(r.x + r.w - tw - 2, Math.max(r.x + 2, t.x(x.t + w / 2) + 16));   // right of the handle
+      const tw = g.measureText(s).width + 8, lx = Math.min(r.x + r.w - tw - 2, Math.max(r.x + 2, t.x(xfEdge(x, w)) + 16));   // right of the handle
       g.fillStyle = "rgba(9,9,13,0.85)"; g.fillRect(lx, r.y + 2, tw, 15);
       g.fillStyle = "#fff"; g.fillText(s, lx + 4, r.y + 4.5);
     }
@@ -662,7 +680,7 @@ function lanes() {
       gutter: (g, r) => trackGutter(g, r, k), onGutter: (e, r) => trackGutterDown(e, r, k),
       items: trackItems(k), over: (g, r, t) => { strengthOver(g, r, t); drawXf(g, r, t, k); envOver(g, r, t, k); liftGhost(g, r, t, k); }, onEdit: pieceEdit, marquee: true, xdrag: "tracks",
       pointer: (kind, e, p) => envPointer(k, kind, e, p), claim: (p) => envClaim(k, p),
-      markers: xfMarkers(k), onMarker: (m, t) => { if (m.xf) setXf(m.xf.b, { len: xfClamp(2 * (t - m.xf.t), m.xf.max) }); },
+      markers: xfMarkers(k), onMarker: (m, t) => { if (m.xf) setXf(m.xf.b, { len: xfFromEdge(m.xf, t) }); },
       onMarkerClick: (m, e) => { if (m.xf) xfMenu(e, m.xf); },
       onClick: (t) => playAt(t),
       onItemClick: (it, t, e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey)) playAt(t); },
@@ -1479,7 +1497,33 @@ const tl = new Timeline($("tl"), {
     }
   }),
 });
+// strength u → the sampler's hold, exactly as segments.release computes it (the Composer renders with
+// sigma_max 1): every frame gets all N model passes, a soft frame's estimate is replaced by the reference
+// on the first r of them (fractionally on step floor(r): the two estimates blended), then it denoises
+// freely. r interpolates linearly in noise level t between schedule points, so read off the schedule.
+const nSteps = () => (S.proj && S.proj.model && S.proj.model.steps) || 8;
+const sigm = (lam) => 1 / (1 + Math.exp(lam));                       // t = sigmoid(−logSNR), logSNR 2.0 … −6.2
+function heldSteps(u, N) {                                            // segments.release: r in 0..N
+  if (u >= 1) return 0;
+  if (u <= 0) return N;
+  const th = sigm(2.0 - 0.625 * u * 8.2);                             // segments.threshold (V_SPAN 0.625)
+  const t = (i) => (i === 0 ? 1 : sigm(2.0 - (1 - i / N) * 8.2));     // build_pingpong_schedule(N), logsnr_shift
+  for (let i = N - 1; i >= 0; i--) {                                  // held ⇔ t_i > th; r(t_i) = i, r(0) = N
+    const hi = t(i), lo = i === N - 1 ? 0 : t(i + 1);
+    if (th <= hi) return Math.round((i + 1 - (th - lo) / (hi - lo)) * 1000) / 1000;
+  }
+  return 0;
+}
+const fmtSteps = (u) => {                                              // "2/8 steps free", "+ 1 at 30%" for the blended one
+  const N = nSteps(), r = heldSteps(u, N), held = Math.floor(r), p = r - held;
+  if (p < 0.005) return `${N - held}/${N} steps free`;
+  return `${N - held - 1}/${N} steps free + 1 at ${Math.round((1 - p) * 100)}%`;
+};
+// whole-step strengths: where a drag catches, so a plain drag lands on an exact step count (⇧ = free)
+const stepDetents = () => { const N = nSteps(), out = [0, 1]; for (let k = 1; k < 0.625 * N; k++) out.push(+(k / (0.625 * N)).toFixed(4)); return out; };
 const rw = new CurveLane(tl, {                // the Rewrite lane's strength curve (project.json `rewrite`)
+  fmtU: (u) => `${u.toFixed(2)} (${fmtSteps(u)})`,   // the drag readout + hover tips show the denoise steps it frees
+  detents: stepDetents(),                     // re-set on every paint (they follow Steps)
   closeEnds: true,                            // new spans start at strength 1 (the kit's brush); lower them after
   end: () => Math.max(projLength(), 1),
   magnets: () => [S.cursor, ...pieces().flatMap((p, i) => { const g = geom(i); return [g.at, g.at + g.dur]; })],
@@ -1508,7 +1552,7 @@ function envLane(k) {
     detents: [0, 0.1616, 0.3342, 0.5, 0.7003, 1],         // −∞, −12, −6, −3, −1, 0 dB (envGain's law)
     end: () => Math.max(projLength(), 1),
     magnets: () => [S.cursor, ...pieces().flatMap((p, i) => { const g = geom(i); return (g.track === k) ? [g.at, g.at + g.dur] : []; }),
-      ...joins().filter((x) => x.track === k && x.len > 0).flatMap((x) => [x.t - x.len / 2, x.t + x.len / 2])],
+      ...joins().filter((x) => x.track === k && x.len > 0).flatMap((x) => [x.t - x.l0, x.t + x.l1])],
     onSeek: (t) => seek(t),
     onCommit: (K) => edit((p) => setTrackMix(p, k, (x) => { if (K.length) x.env = K; else delete x.env; })),
   });
@@ -1585,6 +1629,7 @@ function paint() {
   S.multi = new Set([...S.multi].filter((id) => pieces()[+id.slice(1)]));
   tl.multi = S.multi;
   rw.setKeys(p.rewrite || []);
+  rw.o.detents = stepDetents();
   if (S.sel === "w" && !rw.sel) S.sel = null;
   S.empty = emptyIssues();
   emptyChip();
@@ -1597,6 +1642,7 @@ function paint() {
   $("dit").value = (p.model && p.model.dit) || "medium";
   $("steps").value = (p.model && p.model.steps) || 8;
   $("cfg").value = (p.model && p.model.cfg) ?? 1;
+  if (document.activeElement !== $("seed")) $("seed").value = Number.isInteger(p.model && p.model.seed) ? p.model.seed : "";
   const lo = (p.model && p.model.loras) || [], ls = loraStack();
   if (JSON.stringify(lo) !== JSON.stringify(ls.value)) ls.set(lo);
   else if (ls.n !== +$("steps").value) ls.paint();     // the step window's "of N" follows Steps
@@ -1610,6 +1656,11 @@ function paint() {
   $("render").title = S.range ? `render only ${fmt(S.range[0])} – ${fmt(S.range[1])} (the blue section; × on the ruler or Esc clears it)${
       S.range[1] > L + 1e-3 ? `. It runs ${fmt(S.range[1] - L)} past the last clip: SA3 continues the music there (rounded up to a whole bar)` : ""}`
     : "render takes of the whole timeline in the studio's queue (each lands as a lane under the tracks). Drag on the ruler to render only a section";
+  $("mixdown").disabled = !L;
+  $("mixdown").querySelector("span").textContent = S.range ? "Export section mp3" : "Export mp3";
+  $("mixdown").title = S.range
+    ? `export ${fmt(S.range[0])} – ${fmt(Math.min(S.range[1], L))} exactly as it plays (the mix + master, no AI) to an mp3 in outputs/composer/${S.name}/exports/`
+    : `export the whole timeline exactly as it plays (the mix + master, no AI) to an mp3 in outputs/composer/${S.name}/exports/. Drag on the ruler to export only a section`;
   status();
   saveChip();
   inspector();
@@ -1959,12 +2010,11 @@ function abPlay(pi, f) {
 
 function rewriteInspector(host) {
   const k = rw.selKey(), b = rw.selBox();
-  const u = k ? k[1] : b ? b.u : 0, N = (S.proj.model && S.proj.model.steps) || 8;
-  const free = (v) => Math.round(v * 0.625 * N);   // segments.threshold: u maps onto 0..5 of 8 free steps (V_SPAN), at any step count
+  const u = k ? k[1] : b ? b.u : 0;
   host.appendChild(el(`<h3>Rewrite ${k ? "keypoint" : "span"}</h3>`));
   host.appendChild(el(k ? `<div class="chips"><span class="ui-chip dim">at ${fmt(k[0])}</span></div>`
     : `<div class="chips"><span class="ui-chip dim">${fmt(b.a)} → ${fmt(b.b)}</span><span class="ui-chip dim">${(b.b - b.a).toFixed(2)} s</span></div>`));
-  slider(host, "strength", u, 0, 1, 0.01, (v) => (v >= 1 ? "1 · regenerate" : v <= 0 ? "0 · keep" : `${v.toFixed(2)} · ~${free(v)} of ${N} steps free`), (v, fin) => fin && rw.setStrength(v),
+  slider(host, "strength", u, 0, 1, 0.01, (v) => (v >= 1 ? "1 · regenerate" : v <= 0 ? "0 · keep" : `${v.toFixed(2)} · ${fmtSteps(v)}`), (v, fin) => fin && rw.setStrength(v),
     { tip: "0 keeps the reference, 1 regenerates from scratch; in between SA3 starts from the reference partway through denoising: low values keep the arrangement and re-render the sound" });
   host.appendChild(el(`<div class="note">${u >= 1 ? "Regenerated: new music here, bridging what's around it."
     : "Soft: held toward the reference, then released. Around 0.2-0.4 keeps the arrangement and re-renders the timbre; over overlapping clips this is the glue (the layers come back as one performance)."}</div>`));
@@ -2056,7 +2106,7 @@ function projectInspector(host) {
   lim.querySelector(".ceil").onchange = (e) => edit((q) => { q.master = { ...(q.master || {}), ceiling: Math.min(0, +e.target.value || -1) }; });
   h.appendChild(lim);
   h.appendChild(el(`<div class="meter">reference: peak ${mt.peak ?? "–"} dBFS · ${mt.lufs ?? "–"} LUFS</div>`));
-  h.appendChild(el('<div class="note">The live Mix monitor approximates the limiter; the Reference has the real one.</div>'));
+  h.appendChild(el('<div class="note">The live Mix monitor matches the Reference exactly below the ceiling; on overs its limiter is close, not identical.</div>'));
 }
 
 // flush an edit still waiting on autosave: the server routes below read project.json from disk
@@ -2173,6 +2223,22 @@ async function exportSplice(t) {
     toast(`Splice export written to outputs/composer/${S.name}/${r.path}`);
   } catch (e) { toast("Splice: " + e.message, { error: true }); }
 }
+// Plain mixdown (no AI): the server encodes the built reference (what the monitor plays) to mp3
+async function exportMix() {
+  const b = $("mixdown");
+  try {
+    b.disabled = true;
+    toast("Exporting mp3…");
+    clearTimeout(saveT);
+    await saveNow();                           // the server encodes the ref.wav built from project.json on disk
+    if (S.error) return toast("Fix the build error first: " + S.error, { error: true });
+    const r = await api.post("/sa3/composer/mixdown", { name: S.name, section: S.range ? [S.range[0], S.range[1]] : null });
+    const a = document.createElement("a"); a.href = r.url; a.download = r.path.split("/").pop(); a.click();
+    toast(`${fmt(r.seconds)} exported to outputs/composer/${S.name}/${r.path}`);
+  } catch (e) { toast("Export: " + e.message, { error: true }); }
+  finally { b.disabled = false; }
+}
+$("mixdown").onclick = exportMix;
 async function promote(t) {
   try {
     await flushSave();                         // the server builds the new base from project.json on disk
@@ -2456,7 +2522,8 @@ function fullyMuted(a = 0, b = condLen()) {
 }
 async function render() {
   const n = Math.max(1, Math.min(16, +$("nseeds").value || 2));
-  const seeds = Array.from({ length: n }, () => Math.floor(Math.random() * 2 ** 31));
+  const s0 = ((S.proj || {}).model || {}).seed;   // Render settings → Seed: fixed = s0, s0 + 1, …; unset = random per take
+  const seeds = Array.from({ length: n }, (_, i) => (Number.isInteger(s0) ? s0 + i : Math.floor(Math.random() * 2 ** 31)));
   const sec = S.range ? [S.range[0], S.range[1]] : null, name = S.name;
   // optimistic: the batch's lanes show at once ("Queuing"), the save + build + post run after;
   // the server's batch replaces this placeholder when the post returns
@@ -2496,7 +2563,7 @@ async function pollJob() {
     S.takes = d.takes || [];
     S.jobs = (d.jobs || []).concat(S.jobs.filter((j) => j.local));   // keep placeholders still posting
     const nw = S.takes.find((t) => !had.has(t.id));
-    if (nw) S.take = nw.id;
+    if (nw && !S.take) S.take = nw.id;   // never steal the selection: ▶ / space / a seek play S.take, so a landing take must not jump playback
     for (const j of S.jobs) if (j.error && !j.running && !seenErr.has(j.id)) { seenErr.add(j.id); toast("Render: " + j.error, { error: true }); }
     paint();
     if (S.jobs.some((j) => j.running)) pollT = setTimeout(pollJob, 2000);
@@ -2528,6 +2595,11 @@ function loraStack() {
     onChange: (list) => edit((p) => { p.model = { ...(p.model || {}), loras: list }; }),
   }));
 }
+$("seed").onchange = () => edit((p) => {     // empty = random every render (no model.seed)
+  const v = $("seed").value.trim(), m = { ...(p.model || {}) };
+  if (v === "" || !Number.isFinite(+v)) delete m.seed; else m.seed = Math.max(0, Math.min(2 ** 31 - 1, Math.floor(+v)));
+  p.model = m;
+});
 $("cfg").onchange = () => edit((p) => { p.model = { ...(p.model || {}), cfg: Math.max(0, Math.min(10, +$("cfg").value || 0)) }; });
 $("steps").onchange = () => edit((p) => { p.model = { ...(p.model || {}), steps: Math.max(4, Math.min(16, +$("steps").value || 8)) }; });
 $("nseeds").value = prefs.nseeds || 2;

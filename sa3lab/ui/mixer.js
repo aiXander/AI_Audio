@@ -44,6 +44,7 @@ const LOOK = 220 / SR;     // limiter lookahead (alimiter attack=5 ms), also its
 const LEAD = 0.03;         // scheduling headroom: a start lands on the audio thread's next quanta
 const XF = 0.008;          // declick crossfade on every start / stop / restart
 const GLIDE = 0.01;        // in-place parameter changes (strip, master, automation) glide this long
+const PRE = 0.05;          // a restart's new graph runs this long silent first, so its filters have settled at the crossfade
 const KEEP = 6;            // decoded buffers kept beyond the current pieces (undo, A/B)
 
 const LIMITER = `
@@ -206,6 +207,7 @@ export class Mixer {
     const a = Math.max(tl + GLIDE, v.vs), ct = (t) => s.base + (t - s.t0);
     try {
       g.cancelAndHoldAtTime(T);
+      g.setValueAtTime(v.p.env ? Math.max(0, v.p.env(Math.max(tl, v.vs))) : 1, T);   // pin it: a hold alone inserts nothing on an unautomated param
       g.linearRampToValueAtTime(p.env ? Math.max(0, p.env(a)) : 1, ct(a));
       applyPlan(g, envPlan(p, a + 2 / SR, v.ve), ct);
       return true;
@@ -285,7 +287,7 @@ export class Mixer {
     if (tok !== this.tok) return;            // a newer play() / stop() took over meanwhile
     let start = null;
     if (cont && this.sess) {                 // where the old graph will be when the new one takes over
-      start = ctx.currentTime + LEAD + 0.02;
+      start = ctx.currentTime + LEAD + 0.02 + PRE;
       t0 = this.sess.t0 + (start - this.sess.base);
     }
 
@@ -314,12 +316,14 @@ export class Mixer {
     const pc = this.previewCurves(t0, last);
     const noise = pc ? this.noiseBuf() : null;
 
-    if (start == null || ctx.currentTime > start - 0.005) start = ctx.currentTime + LEAD;   // (a slow build: a few ms repeat, never misaligned voices)
+    if (start == null || ctx.currentTime > start - PRE - 0.005) start = ctx.currentTime + LEAD + (cont ? PRE : 0);   // (a slow build: a few ms repeat, never misaligned voices)
     const ct = (t) => start + (t - t0);
-    const s = { t0, base: start, fade, dry, voices, end: last, cont: !!cont };
+    const mid = cont || ps.some((p) => p.at < t0 - 1e-4);   // starting inside audio: fade in, else the clip's own fade stands
+    const s = { t0, base: start, fade, dry, voices, end: last, cont: !!cont, mid };
     for (const v of voices) {
       if (v.plan) applyPlan(v.eg.gain, v.plan, ct);
-      v.src.start(ct(v.vs), Math.max(0, t0 - v.p.at));
+      const pre = cont && v.vs <= t0 ? Math.min(PRE, t0 - v.p.at) : 0;   // pre-roll (silent: the fade is 0 until start)
+      v.src.start(ct(v.vs) - pre, Math.max(0, t0 - v.p.at - pre));
     }
     if (pc) {
       const nz = ctx.createGain(), src = ctx.createBufferSource();
@@ -330,8 +334,7 @@ export class Mixer {
       src.start(start, (t0 * 1.37) % 4);
       voices.push({ key: "_noise", src, bq: [] });
     }
-    const mid = cont || ps.some((p) => p.at < t0 - 1e-4);   // starting inside audio: fade in, else the clip's own fade stands
-    if (mid) { fade.gain.setValueAtTime(0, start); fade.gain.linearRampToValueAtTime(1, start + XF); }
+    if (mid) { fade.gain.value = 0; fade.gain.setValueAtTime(0, start); fade.gain.linearRampToValueAtTime(1, start + XF); }
     if (this.sess) this.retire(this.sess, start);           // the old graph crossfades out as this one comes in
     this.sess = s;
     this.playing = true;
@@ -349,8 +352,9 @@ export class Mixer {
     }, Math.max(0, left) * 1000 + 60);
   }
   retire(s, at) {                            // fade a graph out from `at` over XF, then free it
-    const g = s.fade.gain;
-    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(at); else { g.cancelScheduledValues(at); g.setValueAtTime(g.value, at); }
+    const g = s.fade.gain, v = s.mid ? Math.max(0, Math.min(1, (at - s.base) / XF)) : 1;   // the fade's value at `at`
+    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(at); else g.cancelScheduledValues(at);
+    g.setValueAtTime(v, at);                 // pinned: the ramp below starts at `at`, not at the last event
     g.linearRampToValueAtTime(0, at + XF);
     for (const v of s.voices) { try { v.src.stop(at + XF + 0.002); } catch (e) { /* never started */ } }
     setTimeout(() => { for (const v of s.voices) v.src.disconnect(); s.fade.disconnect(); }, (at - this.ctx.currentTime + XF) * 1000 + 100);

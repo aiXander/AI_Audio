@@ -17,7 +17,7 @@ The module docstrings are the manual; this is the map.
 | File | Role |
 |---|---|
 | `sa3lab/composer/compose.py` | project.json → layout (measure, align, fix, place) → mix → reference WAV + segments box; strength keys, conditioning curves, windows past 380 s, section renders, server-side job submission, splice export |
-| `sa3lab/composer/server.py` | every `/sa3/composer/*` route (list in its docstring), takes listing, promote, keep / trash a take, imports, project-shape conversion |
+| `sa3lab/composer/server.py` | every `/sa3/composer/*` route (list in its docstring), takes listing, promote, keep / trash a take, imports, project-shape conversion, plain mixdown export (`export_mix`: ref.wav, whole or the ruler selection, to a 320 kbps mp3 in `exports/`, no AI) |
 | `sa3lab/composer/vault.py` | the ⌘S deep copy: every outside file the saved project reads, APFS-cloned into `.vault/` on a background thread; read side `condsrc.vaulted` |
 | `sa3lab/composer/fit.py` | mismatch badges per piece / seam / overlap and the recommended fix chain ("Fit all") |
 | `sa3lab/composer/page/composer.js` | the editor (tracks, Rewrite lane, Conditioning lane, take lanes, inspectors, Fit panel) |
@@ -179,9 +179,12 @@ default between "sound" and "prompt" mode is for the 0g blind triplets to decide
   the page or the project lock. Hardlinks were not used: a clone is a truly independent copy.
 - **Split** (right-click a clip): two pieces with identical settings, no fade at the cut; strength_keys
   treats a same-source contiguous edge as no edge, so a split adds no seam.
-- **Crossfades at back-to-back joins** (`compose.transitions`, the page's ⟷ handles): centred on the
-  join, built from source audio *past* each clip's cut (handles), so the timeline geometry (`at`, `dur`)
-  never moves; the clip's cached audio carries `pre` / `post` seconds outside it and every consumer
+- **Crossfades at back-to-back joins** (`compose.transitions`, the page's ⟷ handles): built from
+  source audio *past* each clip's cut (handles), so the timeline geometry (`at`, `dur`) never moves.
+  Centred on the join when both clips have audio to spare, else shifted onto the side that has it
+  (`xf_split` / page `xfSplit`, one rule in both): a take dropped in place onto its source clips has
+  nothing past its own edges, so the default fade lies inside the take with the source clip running on
+  under it, applied with no click; `pre` / `post` are then unequal (one may be 0); the clip's cached audio carries `pre` / `post` seconds outside it and every consumer
   that places audio must offset by `pre` (`compose.mix`, the monitor's `syncMixer`). Fit measures with
   `layout(xfades=False)`. A crossfaded join drops its seam (the user chose how it sounds); a hard cut
   (`len 0`) keeps it, so "let SA3 blend it" = pick Hard cut. A split is never a transition (it would
@@ -280,8 +283,11 @@ time-stretch (`bench/latent_stretch.py`) against rubberband; 0h tests splicing T
   (`segments.locked_length`), and one input mode at a time (`segments.BOTH`); the composer uses the
   inpaint input only.
 - **Browser preview and server mix must run the same filters** (RBJ biquads both sides, `mixdsp.py` vs
-  `ui/mixer.js`), or what Xander mixes by ear isn't what SA3 receives. The limiter is approximate in the
-  browser.
+  `ui/mixer.js`), or what Xander mixes by ear isn't what SA3 receives. Null-tested 2026-11-07 (headless
+  Chromium OfflineAudioContext vs `mixdsp` + `compose.env_gain`): strip, pan, envelope, master and a
+  mid-play restart match to −84 dB (float rounding); only the limiter on overs differs (−32 dB residual
+  at +15 dB drive, same ceiling). Never put a DynamicsCompressorNode in the monitor: the WebAudio spec
+  gives it automatic makeup gain (+0.57 dB per dB of ceiling), so it monitors louder than the reference.
 - **Beats, keys and downbeats are guesses**, absent for half the library: always nudgeable, grey when
   unconfident, never auto-placed on a guessed downbeat. Busy breakbeats flip between on- and off-beat
   when phase is measured on different audio, so measure once (the snap) and reuse it.

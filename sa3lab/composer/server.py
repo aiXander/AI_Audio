@@ -40,6 +40,7 @@ page reload; these routes need `make start`.
                                               {id}: a piece source that never enters the starred library
     GET  /sa3/composer/imports?name=        → [{id, seconds, name}]
     POST /sa3/composer/export {name, take}  → splice export (compose.splice) → {url}
+    POST /sa3/composer/mixdown {name, section?} → the timeline's plain mix (ref.wav, no AI) → MP3 in exports/ → {url}
     GET  /sa3/composer/file?name=&path=     → a file in the project folder (exports)
     GET  /sa3/page/library                  → the Library page (sa3lab/composer/page/library.*)
     GET  /sa3/app                           → the tab host (sa3lab/ui/app.html: Studio · Library ·
@@ -733,6 +734,42 @@ def export_splice(name: str, take_id: str) -> dict:
             "url": f"/sa3/composer/file?name={name}&path=exports/{out.name}"}
 
 
+def export_mix(name: str, section: list | None = None) -> dict:
+    """Plain mixdown, no AI: the project's reference (every piece through its strip, summed, master
+    gain + limiter: exactly what `build` writes as ref.wav and the live monitor plays) encoded to a
+    320 kbps MP3 in exports/, the whole timeline or just `section` [t0, t1] (clamped to it). The
+    ref.wav is reused when it is newer than project.json, else the project is rebuilt first."""
+    import subprocess
+    import time
+    import compose
+    d = _dir(name)
+    pj = d / "project.json"
+    if not pj.is_file():
+        return {"error": "nothing saved in this project yet"}
+    with _lock(name):
+        ref = d / "ref.wav"
+        if not ref.is_file() or ref.stat().st_mtime < pj.stat().st_mtime:
+            try:
+                ref = compose.build(compose.load(pj))["ref"]
+            except SystemExit as e:
+                return {"error": str(e)}
+        L = compose.src_dur(ref)
+        a, z = 0.0, L
+        if section:
+            a, z = max(0.0, float(section[0])), min(L, float(section[1]))
+            if z - a < 0.05:
+                return {"error": "the selected section lies past the end of the timeline"}
+        tag = f"_{a:.1f}-{z:.1f}s" if section else ""
+        out = d / "exports" / f"{name}_mixdown{tag}_{time.strftime('%Y%m%d-%H%M%S')}.mp3"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{a:.4f}", "-to", f"{z:.4f}", "-i", str(ref),
+                            "-c:a", "libmp3lame", "-b:a", "320k", str(out)], capture_output=True, text=True)
+    if r.returncode:
+        return {"error": "ffmpeg: " + (r.stderr.strip().splitlines() or ["failed"])[-1]}
+    return {"ok": True, "path": f"exports/{out.name}", "seconds": round(z - a, 2),
+            "url": f"/sa3/composer/file?name={name}&path=exports/{out.name}"}
+
+
 # ── routes ───────────────────────────────────────────────────────────────────────────────────
 def _static(base: Path, rel: str):
     f = (base / rel).resolve()
@@ -908,6 +945,10 @@ def install_routes() -> None:
         b = await request.json()
         return await thread(lambda: export_splice(b.get("name", ""), b.get("take", "")))
 
+    async def mixdown_post(request: Request):
+        b = await request.json()
+        return await thread(lambda: export_mix(b.get("name", ""), b.get("section")))
+
     def file_get(name: str, path: str):
         try:
             return _static(_dir(name), path)
@@ -938,6 +979,7 @@ def install_routes() -> None:
         app.add_api_route("/sa3/composer/import", import_post, methods=["POST"])
         app.add_api_route("/sa3/composer/imports", imports_get, methods=["GET"])
         app.add_api_route("/sa3/composer/export", export_post, methods=["POST"])
+        app.add_api_route("/sa3/composer/mixdown", mixdown_post, methods=["POST"])
         app.add_api_route("/sa3/composer/file", file_get, methods=["GET"])
         app.add_api_route("/sa3/page/composer", page_get, methods=["GET"])
         app.add_api_route("/sa3/page/composer/{path:path}", page_file, methods=["GET"])

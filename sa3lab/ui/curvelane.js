@@ -261,6 +261,7 @@ export class CurveLane {
     if (kind === "move") {
       if (!d.moved && Math.abs(p.px - d.x0) < DRAG && Math.abs(p.py - d.y0) < DRAG) return;
       d.moved = true;
+      this.labelAt = [p.px, p.py];                   // the drag readout follows the cursor
       if (d.mode === "new") {
         const t = this.snapT(p.t, [], free), a = Math.min(d.ts, t), b = Math.max(d.ts, t);
         this.K = b - a >= C.SPL ? C.setRange(d.base, a, b, d.u) : d.base.map((k) => k.slice());
@@ -291,7 +292,7 @@ export class CurveLane {
       return;
     }
     if (kind === "up") {
-      this.drag = null; this.label = null;
+      this.drag = null; this.label = null; this.labelAt = null;
       if (!d.moved) {
         if (d.mode === "new") { this.sel = null; if (this.o.onSeek) this.o.onSeek(p.t); }
         this.tl.redraw();
@@ -363,11 +364,17 @@ export class CurveLane {
       g.fillStyle = this.o.color || C.ucol(k[1]); g.strokeStyle = on ? "#fff" : hv ? "rgba(255,255,255,0.8)" : "rgba(9,9,13,0.9)"; g.lineWidth = on || hv ? 2 : 1;
       g.beginPath(); g.arc(x, y, on || hv ? 5.5 : 4, 0, 7); g.fill(); g.stroke();
     });
-    if (this.label) {
+    if (this.label) {                                // the drag readout: a small tooltip beside the cursor, kept inside the lane
       g.font = "11px JetBrains Mono, monospace"; g.textBaseline = "top";
-      const w = g.measureText(this.label).width + 10;
-      g.fillStyle = "rgba(9,9,13,0.85)"; g.fillRect(r.x + r.w - w - 4, r.y + 3, w, 16);
-      g.fillStyle = "#e8e8f0"; g.fillText(this.label, r.x + r.w - w + 1, r.y + 5);
+      const w = g.measureText(this.label).width + 10, H = 16;
+      const [cx, cy] = this.labelAt || [r.x + r.w, r.y];
+      let x = cx + 12, y = cy - H - 6;
+      if (x + w > r.x + r.w - 2) x = cx - 12 - w;
+      x = C.clamp(x, r.x + 2, Math.max(r.x + 2, r.x + r.w - w - 2));
+      y = C.clamp(y, r.y + 2, Math.max(r.y + 2, r.y + r.h - H - 2));
+      g.fillStyle = "rgba(9,9,13,0.9)"; g.fillRect(x, y, w, H);
+      g.strokeStyle = "rgba(255,255,255,0.18)"; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, w - 1, H - 1);
+      g.fillStyle = "#e8e8f0"; g.fillText(this.label, x + 5, y + 2);
     }
   }
 }

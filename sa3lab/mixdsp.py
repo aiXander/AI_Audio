@@ -14,8 +14,9 @@ use the same filters:
 - **Pan**: the StereoPannerNode equal-power algorithm for a stereo input, in numpy.
 - **Gain**: dB → linear, in numpy.
 - **Master**: gain, then ffmpeg `alimiter` (ceiling `limit` dBFS, auto-level off). The browser
-  uses a DynamicsCompressorNode as a stand-in limiter, so loud overs differ slightly (the page says
-  so); below the ceiling the master is exact.
+  runs a lookahead brick-wall limiter worklet with the same 5 ms attack / 50 ms release
+  (`ui/mixer.js` LIMITER): below the ceiling the monitor is sample-exact, on overs it is close
+  (same ceiling, ~0.1 dB level difference when driven hard), not identical.
 
 Mix strip JSON (every key optional; absent = bypass):
 

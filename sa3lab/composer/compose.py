@@ -9,7 +9,8 @@ pieces cut from renders → one reference WAV + a segments box → takes rendere
 **project.json** (everything optional except pieces / sequence):
 
     {"name": "demo", "seeds": [1, 2, 3], "length": null, "bpm": null, "key": null, "lufs": null,
-     "model": {"dit": "medium", "decoder": "same-l", "steps": 8, "cfg": 1.0},
+     "model": {"dit": "medium", "decoder": "same-l", "steps": 8, "cfg": 1.0,
+               "seed": 42},   # page-only: Render settings → Seed; takes get seed, seed + 1, … (absent = random per take)
      "pieces": [{"id": <render id>, "src": [s0, s1], "at": t, "track": 0,
                  "align": true, "speed": 1.0, "mute": false, "solo": false, "fade": [0.01, 0.01],
                  "xfade": {"len": 0.5, "shape": "eq" | "lin"},   # the crossfade into this clip (below)
@@ -70,11 +71,14 @@ project length (the studio's Length follows the reference: segments.locked_lengt
   multiplies into that rubberband factor, for every piece; a beat piece is still cut to whole beats
   and snapped, so stretching it to twice its beats gives half-time on the grid.
 - **Crossfades** (`transitions`, the editor's ⟷ handles on a track): where a clip starts within
-  XF_TOL of where the previous clip on the same track ends, and both have source audio past that
-  edge (A after its cut, B before it), the two overlap by `len` seconds centred on the join: A
-  plays on for len/2 fading out, B starts len/2 early fading in (equal-power by default, `"lin"`
-  for phase-aligned material). The later clip's `xfade` sets it (default XF_DEFAULT; `len: 0` = a
-  hard cut), clamped to `max` = 2 × the shorter handle and to either clip's length. The handles
+  XF_TOL of where the previous clip on the same track ends, and either has source audio past that
+  edge (A after its cut, B before it), the two overlap by `len` seconds around the join: centred
+  when both have len/2 to spare (A plays on for len/2 fading out, B starts len/2 early fading in),
+  else shifted toward the side that has the audio (`xf_split`: a take dropped onto its source
+  clips has nothing past its own edges, so the fade lies inside the take, the source clip's tail /
+  head running on under it). Equal-power by default, `"lin"` for phase-aligned material. The later
+  clip's `xfade` sets it (default XF_DEFAULT, applied with no click; `len: 0` = a hard cut), clamped
+  to `max` = both handles together and either clip's length. The handles
   are decoded with the clip (same stretch + fix chain) into its cached audio, whose `pre` / `post`
   seconds sit outside its nominal `at` / `dur` (the timeline geometry never changes). A split clip
   (`continued`: same source, contiguous) is no transition. A crossfaded join keeps its audio: no
@@ -538,12 +542,12 @@ def layout(proj: dict, cache_dir: Path | None = None, xfades: bool = True) -> di
     for x in xfades:                                   # the handles each crossfade needs, decoded with the clip
         if x["len"] > 0:
             a, b = x.pop("_a"), x.pop("_b")
-            a["post"], a["_xout"] = x["len"] / 2, x["shape"]
-            b["pre"], b["_xin"] = x["len"] / 2, x["shape"]
+            a["post"], a["_xout"], a["_xout_len"] = x["post"], x["shape"], x["len"]
+            b["pre"], b["_xin"], b["_xin_len"] = x["pre"], x["shape"], x["len"]
         else:
             x.pop("_a"); x.pop("_b")
     for pc in out:
-        if pc["pre"] or pc["post"]:
+        if pc.get("_xin") or pc.get("_xout"):
             _with_handles(pc, cache_dir)
     # `length` only ever adds time (the editor's Extend, a promoted take's length): a clip placed past
     # it still lands whole, exactly as the page draws it (composer.js projLength), never cut short
@@ -580,25 +584,35 @@ def src_dur(path: Path) -> float:
     return _cached("dur", path, fn=f)
 
 
+def xf_split(ln: float, head: float, tail: float) -> tuple:
+    """A crossfade of `ln` s around its join → (seconds before it, seconds after it): centred when
+    both handles allow, else pushed toward the side with audio to spare (B's `head` before its cut
+    covers the part before the join, A's `tail` past its cut the part after). The page's xfSplit."""
+    after = min(tail, max(ln / 2, ln - head))
+    return ln - after, after
+
+
 def transitions(pieces: list) -> list:
-    """Back-to-back joins on a track (see **Crossfades**): [{a, b (piece indexes), track, t, len, max,
-    shape, set}], plus the laid-out pieces as `_a` / `_b` for layout. A join with no source audio past
-    either edge has nothing to fade and is left out."""
+    """Back-to-back joins on a track (see **Crossfades**): [{a, b (piece indexes), track, t, len,
+    pre / post (its seconds before / after t), max, shape, set}], plus the laid-out pieces as `_a` /
+    `_b` for layout. A join with no source audio past either edge has nothing to fade and is left out."""
     out = []
     for k in sorted({pc["track"] for pc in pieces}):
         row = sorted((pc for pc in pieces if pc["track"] == k), key=lambda pc: pc["at"])
         for a, b in zip(row[:-1], row[1:]):
             if abs(a["at"] + a["dur"] - b["at"]) > XF_TOL or a.get("pi") is None or b.get("pi") is None or continues(a, b):
                 continue
-            tail = (src_dur(a["_path"]) - _cut(a)[1]) / float(a.get("stretch") or 1.0)
-            head = _cut(b)[0] / float(b.get("stretch") or 1.0)
-            mx = max(0.0, min(2 * tail, 2 * head, a["dur"], b["dur"]))
+            tail = min(b["dur"], (src_dur(a["_path"]) - _cut(a)[1]) / float(a.get("stretch") or 1.0))
+            head = min(a["dur"], _cut(b)[0] / float(b.get("stretch") or 1.0))
+            mx = max(0.0, min(tail + head, a["dur"], b["dur"]))
             if mx < 0.02:
                 continue
             want = b["_item"].get("xfade") or {}
             ln = float(want.get("len", XF_DEFAULT))
             ln = 0.0 if ln < 0.02 else min(ln, mx)
+            l0, l1 = xf_split(ln, head, tail)
             out.append({"a": a["pi"], "b": b["pi"], "track": k, "t": round(b["at"], 4), "len": round(ln, 4),
+                        "pre": round(l0, 4), "post": round(l1, 4),
                         "max": round(mx, 4), "shape": "lin" if want.get("shape") == "lin" else "eq",
                         "set": "len" in want, "_a": a, "_b": b})
     return out
@@ -606,11 +620,14 @@ def transitions(pieces: list) -> list:
 
 def _with_handles(pc: dict, cache_dir: Path | None) -> None:
     """Replace a laid-out piece's audio with its crossfade version: `pre` / `post` seconds of its own
-    source each side (same stretch, fix chain), faded across the whole overlap (`_xin` / `_xout`
-    shapes); its plain edge fade stays on a side without one. Cached like the plain audio."""
+    source each side (same stretch, fix chain; either may be 0 when the fade lies inside the clip),
+    faded across the whole overlap (`_xin` / `_xout` shapes over `_xin_len` / `_xout_len` seconds);
+    its plain edge fade stays on a side without one. Cached like the plain audio."""
     it, pre, post = pc["_item"], pc["pre"], pc["post"]
     pc["base_key"] = pc["audio_key"]
-    key = hashlib.sha1(json.dumps([pc["audio_key"], round(pre, 4), round(post, 4), pc.get("_xin"), pc.get("_xout")]).encode()).hexdigest()[:16]
+    xin, xout = pc.get("_xin"), pc.get("_xout")
+    key = hashlib.sha1(json.dumps([pc["audio_key"], round(pre, 4), round(post, 4), xin, xout,
+                                   pc.get("_xin_len"), pc.get("_xout_len")]).encode()).hexdigest()[:16]
     hit = (cache_dir / f"{key}.wav") if cache_dir else None
     pc["audio_key"] = key
     if hit and hit.is_file():
@@ -626,12 +643,13 @@ def _with_handles(pc: dict, cache_dir: Path | None) -> None:
     y = np.pad(y[:, :n], ((0, 0), (0, max(0, n - y.shape[1]))))
     f = it.get("fade")
     fa, fb = f if isinstance(f, (list, tuple)) else ((FADE if f is None else f),) * 2
-    y = _fades(apply_fix(y, it.get("fix")), [0.0 if pre else fa, 0.0 if post else fb])
-    ni, no = int(round(2 * pre * SR)), int(round(2 * post * SR))
+    y = _fades(apply_fix(y, it.get("fix")), [0.0 if xin else fa, 0.0 if xout else fb])
+    ni = min(n, int(round(float(pc.get("_xin_len") or 0) * SR))) if xin else 0
+    no = min(n, int(round(float(pc.get("_xout_len") or 0) * SR))) if xout else 0
     if ni > 1:
-        y[:, :ni] *= _xcurve(ni, pc.get("_xin") or "eq", True)
+        y[:, :ni] *= _xcurve(ni, xin, True)
     if no > 1:
-        y[:, n - no:] *= _xcurve(no, pc.get("_xout") or "eq", False)
+        y[:, n - no:] *= _xcurve(no, xout, False)
     pc["audio"] = y
     if hit:
         cache_dir.mkdir(parents=True, exist_ok=True)

@@ -586,6 +586,12 @@ def _add_restore_settings(demo):
     (dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
      a2a, inpaint, inp_s, inp_e, _opts, _fmt) = gen_bf.inputs[:17]
     lora_dds = gen_bf.inputs[17:32][1::5]
+    # upstream builds the slots' Min / Max step sliders with maximum=default_steps (8) and only
+    # raises it per browser session on a Steps change; gradio validates API calls against that
+    # build-time maximum, so a Composer take at 12 steps (its own gradio_client session, LoRA
+    # max step 12) failed "Value 12 is greater than maximum value 8". Bound them by Steps' own max.
+    for c in [x for i in range(3) for x in gen_bf.inputs[17 + 5 * i + 3: 17 + 5 * i + 5]]:
+        c.maximum = steps.maximum
     orig_dit = dit_bf.fn
     mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
     with demo:

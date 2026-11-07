@@ -16,7 +16,7 @@
     <select id="proj" class="ui-input" title="the open project (saved automatically under outputs/composer/)"></select>
     <button id="savechip" class="ui-btn small ghost" title="⌘S saves this project's version (every edit is also autosaved as you go)">⌘S</button>
     <button id="new" class="ui-btn small ghost" title="start a new, empty project">+ New</button>
-    <button id="wipe" class="ui-btn small danger" title="clear the tracks, Rewrite and Conditioning lanes of this project (asks first; render settings, the library and the takes stay; ⌘Z undoes it)">Wipe composition</button>
+    <button id="wipe" class="ui-btn small ghost iconbtn" aria-label="Wipe composition" title="Wipe composition: clear the tracks, Rewrite and Conditioning lanes of this project (asks first; render settings, the library and the takes stay; ⌘Z undoes it)"><svg class="ui-icon" aria-hidden="true"><use href="/sa3/ui/icons.svg#trash"/></svg></button>
     <input id="newname" class="ui-input" placeholder="name, Enter" title="letters, digits, - and _ ; Enter creates it, Esc cancels" hidden>
     <button id="bpmbtn" class="ui-btn small ghost mono" title="the tempo the clips on the tracks agree on (a live estimate, recomputed on every edit): click to see which clips are furthest off">– BPM</button>
     <div id="bpmpop" class="pop" hidden>
@@ -28,6 +28,7 @@
     <button id="setbtn" class="ui-btn ghost" title="model, steps, seams, conditioning, takes per render">⚙ Render settings</button>
     <div id="setpop" class="pop right" hidden>
       <div class="prow" title="how many takes one click renders, each with its own random seed"><label>Takes per render</label><div class="ctl"><input id="nseeds" class="ui-input num" type="number" min="1" max="16" value="2"></div><span class="note">one random seed each: the seed decides most of what a gap becomes</span></div>
+      <div class="prow" title="empty: a fresh random seed for every take. A number: the first take renders with it, the next takes with seed + 1, + 2, … (re-render the same takes after an edit)"><label>Seed</label><div class="ctl"><input id="seed" class="ui-input num" type="number" min="0" step="1" placeholder="random"></div><span class="note">empty = random every render; a number = seed, seed + 1, … per take</span></div>
       <div class="prow"><label>Model</label><div class="ctl"><select id="dit" class="ui-input" title="Medium: the full model (best quality). Small music: faster, rougher"><option value="medium">Medium</option><option value="sm-music">Small music</option></select><input id="steps" class="ui-input num" type="number" min="4" max="16" title="sampler steps: 8 is what the model was distilled for; more is slower and rarely better"><span class="note">steps</span></div><span class="note">8 steps is the default</span></div>
       <div class="prow" title="classifier-free guidance: 1 = off (what the 8-step model was distilled for); above 1 follows the conditioning harder, costs a second model pass per step, and tends to oversaturate"><label>CFG</label><div class="ctl"><input id="cfg" class="ui-input num" type="number" min="0" max="10" step="0.1" value="1"></div><span class="note">1 = off (the default); higher follows the conditioning harder, slower</span></div>
       <div class="prow lorarow"><label title="LoRA adapters every take renders with (the same editor as the studio's LoRA panel)">LoRA</label><div class="ctl"><div id="loras"></div></div><span class="note">every take renders with these; pieces made without them lose that sound in their rewritten parts (the Fit panel flags it)</span></div>
@@ -38,6 +39,7 @@
           <button data-v="keys" title="your own sources at chosen times, edited on the Conditioning lane">Keypoints</button></div></div>
         <span id="condnote" class="note"></span></div>
     </div>
+    <button id="mixdown" class="ui-btn" title="export the timeline as it plays (no AI) to an mp3"><svg class="ui-icon" aria-hidden="true"><use href="/sa3/ui/icons.svg#download"/></svg> <span>Export mp3</span></button>
     <button id="render" class="ui-btn primary" title="render takes of the current timeline in the studio's queue (each lands as a lane under the tracks)">Render</button>
   </div>
   <span id="status" class="ui-chip dim" hidden></span>
