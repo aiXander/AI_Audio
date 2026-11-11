@@ -96,7 +96,8 @@ question.
 the scorer doing the bulk judging, ears checking the top. Rescues the original vector hunt. The
 conditioning work itself stays in the anarchy plan.
 
-**Phase 5: keeper LoRA** (#7), once there are enough keepers.
+**Phase 5: keeper LoRA** (#7), once there are enough keepers. Its main consumer is the one-hour live
+set ([sa3-one-hour-set.md](sa3-one-hour-set.md), gap 5): one sound of Xander's own that holds over an hour.
 
 ## Working practice (recommended to Xander, applies now)
 

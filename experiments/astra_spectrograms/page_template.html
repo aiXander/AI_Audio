@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astra's Favourite Songs</title>
+<style>
+:root {
+  --bg: #f4f2ee; --panel: #ffffff; --ink: #1b1a1f; --muted: #6b6874; --line: #e2ded6;
+  --accent: #c2410c; --accent-soft: rgba(194, 65, 12, 0.1); --chip: #efebe4;
+  --shadow: 0 1px 2px rgba(20, 16, 10, 0.06), 0 6px 24px rgba(20, 16, 10, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0d12; --panel: #17161d; --ink: #ecebf2; --muted: #9a97a8; --line: #2a2833;
+    --accent: #fb923c; --accent-soft: rgba(251, 146, 60, 0.12); --chip: #22202a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 30px rgba(0, 0, 0, 0.35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0d12; --panel: #17161d; --ink: #ecebf2; --muted: #9a97a8; --line: #2a2833;
+  --accent: #fb923c; --accent-soft: rgba(251, 146, 60, 0.12); --chip: #22202a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 80px; }
+header h1 { font-size: clamp(26px, 4vw, 40px); line-height: 1.1; margin: 0 0 8px; letter-spacing: -0.02em; }
+header p { margin: 0; color: var(--muted); max-width: 820px; }
+.mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ── DJ deck (static port of sa3lab/djview.js) ── */
+.deck { margin: 22px 0 28px; background: #000; color: #e8e8f0; border-radius: 14px; padding: 12px 14px 12px;
+  box-shadow: var(--shadow); user-select: none; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+.deck .top { display: flex; align-items: baseline; gap: 12px; min-height: 26px; flex-wrap: wrap; }
+.deck .now { font: 600 14px Inter, system-ui, sans-serif; color: #fff; }
+.deck .now i { font-style: normal; font-weight: 400; color: #a9a9bb; }
+.deck .segn { margin-left: auto; font-size: 11px; color: #6f6f82; }
+.deck .mainw { position: relative; height: clamp(150px, 26vw, 260px); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.deck canvas.main { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.deck canvas.main:active { cursor: grabbing; }
+.deck canvas.ov { display: block; width: 100%; height: 58px; margin-top: 8px; cursor: pointer; touch-action: none; }
+.deck .bar { display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+.deck button { font: inherit; color: #ddd; background: transparent; border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 8px; height: 32px; padding: 0 10px; cursor: pointer; }
+.deck button:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+.deck .pp { width: 46px; height: 46px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); display: grid; place-items: center; padding: 0; }
+.deck .pp svg { width: 18px; height: 18px; }
+.deck .pp.on { border-color: #3fd27a; color: #3fd27a; box-shadow: 0 0 14px rgba(63,210,122,0.35); }
+.deck .tm { display: flex; flex-direction: column; cursor: pointer; min-width: 128px; }
+.deck .tm i { font-style: normal; font-size: 10px; letter-spacing: 0.12em; color: #8b8b9c; }
+.deck .tm b { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; color: #fff; line-height: 1.05; }
+.deck .zm { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 180px; max-width: 380px; font-size: 11px; color: #8b8b9c; }
+.deck .zm input { flex: 1; accent-color: #9b8cff; }
+.deck .zm b { min-width: 40px; text-align: right; color: #e8e8f0; font-weight: 500; font-size: 13px; }
+.deck .hint { margin-left: auto; font-size: 11px; color: #55556a; }
+
+/* ── tabs ── */
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.tab { font: 600 14px Inter, system-ui, sans-serif; color: var(--muted); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 9px 16px; cursor: pointer; }
+.tab span { color: var(--accent); margin-right: 6px; font-family: ui-monospace, Menlo, monospace; }
+.tab[aria-selected="true"] { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
+.song { display: none; }
+.song.on { display: block; }
+.hero { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); }
+.hero img { display: block; width: 100%; height: auto; background: #000; }
+.hero .meta { padding: 18px 20px 20px; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 22px; }
+.hero .meta > div, .card { min-width: 0; }
+.hero h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -0.01em; }
+.hero .sounds { margin: 0 0 12px; }
+.hero .why { margin: 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; font-style: italic; }
+.hero h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.hero ol { margin: 0; padding-left: 0; list-style: none; }
+.hero ol li { padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+.hero ol li:last-child { border-bottom: 0; }
+.hero .small { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+details { margin-top: 10px; font-size: 13px; color: var(--muted); }
+details summary { cursor: pointer; }
+details pre { white-space: pre-wrap; background: var(--chip); padding: 10px 12px; border-radius: 8px; font-size: 12px; max-height: 320px; overflow: auto; }
+
+h3.sec { margin: 30px 0 12px; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 12px 10px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.card.src { border-style: dashed; }
+.card .hd { display: flex; align-items: baseline; gap: 8px; }
+.card .hd b { font-size: 15px; }
+.card .hd .k { margin-left: auto; font-size: 11px; color: var(--muted); }
+.card p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.card img { width: 100%; height: auto; border-radius: 6px; display: block; background: #000; aspect-ratio: 1100 / 300; }
+.card audio { width: 100%; height: 34px; }
+.card .row { display: flex; gap: 8px; align-items: center; }
+.card .row audio { flex: 1; }
+.card .dk { font: 600 12px Inter, system-ui, sans-serif; color: var(--accent); background: var(--accent-soft); border: 1px solid transparent;
+  border-radius: 8px; height: 30px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
+.card .dk:hover { border-color: var(--accent); }
+.legend { font-size: 13px; color: var(--muted); margin: 6px 0 0; max-width: 900px; }
+@media (max-width: 760px) {
+  .hero .meta { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .deck .hint { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Astra's Favourite Songs</h1>
+    <p>GPT-6 Astra (via Codex, high reasoning) was asked four times, independently, to compose an original piece it loves and paint it as a 30-second spectrogram (mel 0–12 kHz, magma −80…0 dB). A script crops each plot, reads the colours back as energy and turns it into sound in several ways; Stable Audio 3 then cleans some up at rising strengths.</p>
+  </header>
+
+  <section class="deck" id="deck" aria-label="DJ deck: every version back to back">
+    <div class="top"><div class="now" id="now">All versions, back to back</div><div class="segn" id="segn"></div></div>
+    <div class="mainw"><canvas class="main" id="main"></canvas></div>
+    <canvas class="ov" id="ov" title="Click or drag to seek"></canvas>
+    <div class="bar">
+      <button class="pp" id="pp" title="Play / pause (space)"></button>
+      <div class="tm" id="tm" title="Click: elapsed / remaining"><i></i><b></b></div>
+      <button id="prev" title="Previous version (shift ←)">◀ prev</button>
+      <button id="next" title="Next version (shift →)">next ▶</button>
+      <label class="zm"><span>View</span><input type="range" id="zm" min="0" max="1000" step="1"><b id="zmv"></b></label>
+      <div class="hint">space play · ←/→ 1 s · shift ←/→ version · drag scrub · wheel zoom</div>
+    </div>
+    <audio id="all" preload="auto"></audio>
+  </section>
+
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <main id="songs"></main>
+</div>
+
+<script>
+const D = /*DATA*/null;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const segs = [];               // global segment index -> {song, version}
+D.songs.forEach((s) => s.versions.forEach((v) => { segs[v.seg] = { s, v }; }));
+
+// ── tabs + song panels ──
+const tabs = document.getElementById("tabs"), main = document.getElementById("songs");
+D.songs.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.className = "tab"; b.setAttribute("role", "tab"); b.dataset.i = i;
+  b.innerHTML = `<span>${s.n}</span>${esc(s.title)}`;
+  b.addEventListener("click", () => select(i));
+  tabs.appendChild(b);
+  const sec = document.createElement("section");
+  sec.className = "song"; sec.id = s.slug;
+  sec.innerHTML = `
+    <div class="hero">
+      <img src="${s.image}" alt="Astra's spectrogram of ${esc(s.title)}" loading="lazy">
+      <div class="meta">
+        <div>
+          <h2>${esc(s.title)}</h2>
+          <p class="sounds">${esc(s.sounds)}</p>
+          <p class="why">“${esc(s.why)}”</p>
+          <div class="small">Astra's image as delivered (${esc(s.image_note)}). Everything in the plot area was painted by its image model.</div>
+          <details><summary>The image prompt Astra wrote for itself</summary><pre>${esc(s.prompt)}</pre></details>
+          <details><summary>SA3 text prompt (Astra's own description)</summary><pre>${esc(s.sa3_prompt)}</pre></details>
+        </div>
+        <div>
+          <h4>Timeline (Astra)</h4>
+          <ol>${s.timeline.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>
+        </div>
+      </div>
+    </div>
+    <h3 class="sec">Versions</h3>
+    <p class="legend">Each card: the audio, and its spectrogram re-measured on Astra's exact axes (mel 0–12 kHz, magma, −80…0 dB) so you can compare it with the decoded source on the left. “match” = correlation of the two maps (1 = identical).</p>
+    <div class="grid">
+      <div class="card src"><div class="hd"><b>Decoded source</b><span class="k">what the script read</span></div>
+        <img src="${s.source_spec}" alt="decoded source" loading="lazy">
+        <p>Astra's plot area after cropping and colour → dB decoding. Every version below starts from this.</p></div>
+      ${s.versions.map((v) => `
+      <div class="card">
+        <div class="hd"><b>${esc(v.label)}</b><span class="k mono">${v.corr == null ? "" : "match " + v.corr.toFixed(2)}</span></div>
+        <p>${esc(v.blurb)}</p>
+        <img src="${v.spec}" alt="spectrogram of ${esc(v.label)}" loading="lazy">
+        <div class="row"><audio controls preload="none" src="${v.mp3}"></audio><button class="dk" data-seg="${v.seg}" title="Play this version in the deck">▶ deck</button></div>
+      </div>`).join("")}
+    </div>`;
+  main.appendChild(sec);
+});
+function select(i) {
+  [...tabs.children].forEach((b, j) => b.setAttribute("aria-selected", String(i === j)));
+  [...main.children].forEach((s, j) => s.classList.toggle("on", i === j));
+  try { localStorage.setItem("astra-tab", String(i)); } catch (e) { /* private window */ }
+}
+let start = 0;
+try { start = +(localStorage.getItem("astra-tab") || 0) || 0; } catch (e) { /* no storage */ }
+select(Math.min(start, D.songs.length - 1));
+
+// one player at a time
+document.addEventListener("play", (e) => {
+  document.querySelectorAll("audio").forEach((a) => { if (a !== e.target) a.pause(); });
+}, true);
+
+// ── DJ deck: CDJ-style scrolling dadaspec (ported from sa3lab/djview.js) ──
+(() => {
+  const WMIN = 2, WMAX = 32, PH = 0.5, SEG = D.seg;
+  const PLAY = '<svg viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg>';
+  const PAUSE = '<svg viewBox="0 0 16 16"><path d="M4 2.8h2.8v10.4H4zM9.2 2.8H12v10.4H9.2z" fill="currentColor"/></svg>';
+  let pref = { win: 8, remain: false };
+  try { pref = { ...pref, ...JSON.parse(localStorage.getItem("astra-deck") || "{}") }; } catch (e) { /* defaults */ }
+  const save = () => { try { localStorage.setItem("astra-deck", JSON.stringify(pref)); } catch (e) { /* ok */ } };
+  const a = document.getElementById("all"), mainC = document.getElementById("main"), ov = document.getElementById("ov");
+  const zm = document.getElementById("zm"), zmv = document.getElementById("zmv"), pp = document.getElementById("pp");
+  a.src = D.all;
+  const tiles = D.tiles.map((src) => { const im = new Image(); im.decoding = "async"; im.src = src; return im; });
+  const ovImg = new Image(); ovImg.src = D.overview;
+  const total = D.tiles.length * SEG;
+  const dur = () => (isFinite(a.duration) && a.duration) || total;
+  let clock = { t: 0, at: 0 };
+  function now() {
+    const ct = a.currentTime;
+    if (a.paused) { clock = { t: ct, at: performance.now() }; return ct; }
+    const p = clock.t + (performance.now() - clock.at) / 1000;
+    if (Math.abs(p - ct) > 0.06) { clock = { t: ct, at: performance.now() }; return ct; }
+    return p;
+  }
+  function seek(t) { a.currentTime = Math.max(0, Math.min(dur() - 0.01, t)); clock = { t: a.currentTime, at: performance.now() }; }
+  function toggle() { if (a.paused) a.play().catch(() => {}); else a.pause(); }
+  const wToV = (w) => Math.round(1000 * Math.log(w / WMIN) / Math.log(WMAX / WMIN));
+  const vToW = (v) => WMIN * Math.pow(WMAX / WMIN, v / 1000);
+  function paintZoom() { zm.value = wToV(pref.win); zmv.textContent = `${pref.win < 10 ? pref.win.toFixed(1) : Math.round(pref.win)} s`; }
+  zm.addEventListener("input", () => { pref.win = vToW(+zm.value); paintZoom(); save(); });
+  paintZoom();
+  const fmt = (t, tenths = true) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = t - m * 60;
+    return `${String(m).padStart(2, "0")}:${tenths ? s.toFixed(1).padStart(4, "0") : String(Math.floor(s)).padStart(2, "0")}`; };
+  function fit(cv) {
+    const d = devicePixelRatio || 1, w = Math.round(cv.clientWidth * d), h = Math.round(cv.clientHeight * d);
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    return [w, h, d];
+  }
+  const segAt = (t) => Math.max(0, Math.min(D.tiles.length - 1, Math.floor(t / SEG)));
+  function draw() {
+    requestAnimationFrame(draw);
+    const t = now(), [W, H, d] = fit(mainC), g = mainC.getContext("2d");
+    g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+    const t0 = t - pref.win * PH, t1 = t0 + pref.win, k = W / pref.win;
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+    for (let i = Math.max(0, Math.floor(t0 / SEG)); i <= Math.min(D.tiles.length - 1, Math.floor(t1 / SEG)); i++) {
+      const im = tiles[i]; if (!im.complete || !im.naturalWidth) continue;
+      const cps = im.naturalWidth / SEG, a0 = Math.max(t0, i * SEG), a1 = Math.min(t1, (i + 1) * SEG);
+      if (a1 <= a0) continue;
+      g.drawImage(im, (a0 - i * SEG) * cps, 0, (a1 - a0) * cps, im.naturalHeight, (a0 - t0) * k, 0, (a1 - a0) * k + 0.75, H);
+    }
+    // segment boundaries + labels inside the zoomed view
+    g.font = `${11 * d}px "JetBrains Mono", ui-monospace, monospace`;
+    for (let i = Math.ceil(t0 / SEG); i * SEG <= t1; i++) {
+      if (i <= 0 || i >= D.tiles.length) continue;
+      const x = Math.round((i * SEG - t0) * k), sg = segs[i];
+      g.fillStyle = "rgba(255,255,255,0.75)"; g.fillRect(x, 0, 2 * d, H);
+      g.textBaseline = "top"; g.fillStyle = "rgba(255,255,255,0.85)";
+      g.fillText(`${sg.s.n} · ${sg.v.label}`, x + 6 * d, 6 * d);
+    }
+    // 1 s grid
+    const step = pref.win > 16 ? 5 : 1;
+    g.textBaseline = "bottom";
+    for (let s = Math.ceil(t0 / step) * step; s <= t1; s += step) {
+      if (s < 0) continue;
+      const x = Math.round((s - t0) * k) + 0.5, local = s - segAt(s) * SEG, major = Math.abs(local % 5) < 1e-6;
+      g.fillStyle = major ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.05)";
+      g.fillRect(x, 0, d, H);
+      if (major) { g.fillStyle = "rgba(255,255,255,0.5)"; g.fillText(`${Math.round(local)}s`, x + 4 * d, H - 4 * d); }
+    }
+    const px = Math.round(W * PH);
+    g.fillStyle = "rgba(0,0,0,0.55)"; g.fillRect(px - 2 * d, 0, 5 * d, H);
+    g.fillStyle = "#fff"; g.fillRect(px - d, 0, 2 * d, H);
+    g.fillStyle = "#ff3b3b";
+    for (const [y, dir] of [[0, 1], [H, -1]]) { g.beginPath(); g.moveTo(px - 7 * d, y); g.lineTo(px + 7 * d, y); g.lineTo(px, y + dir * 9 * d); g.fill(); }
+    // overview
+    const [OW, OH] = fit(ov), o = ov.getContext("2d"), bar = Math.round(OH * 0.72), T = dur();
+    o.fillStyle = "#000"; o.fillRect(0, 0, OW, OH);
+    if (ovImg.complete && ovImg.naturalWidth) o.drawImage(ovImg, 0, 0, OW, bar);
+    const xs = (tt) => (tt / T) * OW;
+    o.fillStyle = "rgba(10,10,14,0.62)"; o.fillRect(0, 0, xs(t), bar);
+    let prevSong = null;
+    for (let i = 0; i < D.tiles.length; i++) {
+      const x = Math.round(xs(i * SEG)), sg = segs[i], newSong = sg.s !== prevSong;
+      o.fillStyle = newSong ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.22)";
+      o.fillRect(x, newSong ? 0 : bar - 6 * d, newSong ? 2 * d : d, newSong ? OH : 6 * d);
+      if (newSong) {
+        o.font = `600 ${10 * d}px Inter, system-ui, sans-serif`; o.textBaseline = "bottom"; o.fillStyle = "#cfcfe0";
+        const room = xs(sg.s.versions.length * SEG) - 8 * d;          // label only as wide as its song's span
+        let txt = `${sg.s.n} ${sg.s.title}`;
+        while (txt.length > 2 && o.measureText(txt).width > room) txt = txt.slice(0, -2) + "…";
+        o.fillText(o.measureText(txt).width > room ? String(sg.s.n) : txt, x + 5 * d, OH - 1 * d);
+      }
+      prevSong = sg.s;
+    }
+    o.strokeStyle = "rgba(255,255,255,0.7)"; o.lineWidth = d;
+    o.strokeRect(xs(t0) + d / 2, d / 2, Math.max(2 * d, xs(pref.win) - d), bar - d);
+    o.fillStyle = "#fff"; o.fillRect(Math.round(xs(t)) - d, 0, 2 * d, bar);
+    // readouts
+    const sg = segs[segAt(t)];
+    const nowEl = document.getElementById("now");
+    const label = `${sg.s.n} · ${sg.s.title} <i>— ${sg.v.label}</i>`;
+    if (nowEl._l !== label) { nowEl._l = label; nowEl.innerHTML = label; document.getElementById("segn").textContent = `version ${segAt(t) + 1} / ${D.tiles.length}`; }
+    const tm = document.getElementById("tm");
+    tm.querySelector("i").textContent = pref.remain ? "REMAIN (SET)" : "TIME IN VERSION";
+    tm.querySelector("b").textContent = pref.remain ? "-" + fmt(T - t) : fmt(t - segAt(t) * SEG);
+    const on = !a.paused;
+    if (pp._on !== on) { pp._on = on; pp.innerHTML = on ? PAUSE : PLAY; pp.classList.toggle("on", on); }
+  }
+  pp.innerHTML = PLAY;
+  pp.addEventListener("click", toggle);
+  document.getElementById("tm").addEventListener("click", () => { pref.remain = !pref.remain; save(); });
+  document.getElementById("prev").addEventListener("click", () => { const i = segAt(now()); seek((now() - i * SEG < 2 ? i - 1 : i) * SEG); });
+  document.getElementById("next").addEventListener("click", () => seek((segAt(now()) + 1) * SEG));
+  mainC.addEventListener("wheel", (e) => { e.preventDefault(); pref.win = Math.max(WMIN, Math.min(WMAX, pref.win * Math.exp(e.deltaY * 0.002))); paintZoom(); save(); }, { passive: false });
+  let drag = null;
+  mainC.addEventListener("pointerdown", (e) => { if (e.button === 0) drag = { x: e.clientX, t: now(), moved: false, id: e.pointerId }; });
+  mainC.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) < 4) return;
+    if (!drag.moved) { drag.moved = true; try { mainC.setPointerCapture(drag.id); } catch (er) { /* gone */ } }
+    seek(drag.t - (dx / mainC.clientWidth) * pref.win);
+  });
+  mainC.addEventListener("pointerup", () => { if (drag && !drag.moved) toggle(); drag = null; });
+  mainC.addEventListener("pointercancel", () => { drag = null; });
+  let od = false;
+  const oseek = (e) => { const b = ov.getBoundingClientRect(); seek(((e.clientX - b.left) / b.width) * dur()); };
+  ov.addEventListener("pointerdown", (e) => { od = true; ov.setPointerCapture(e.pointerId); oseek(e); });
+  ov.addEventListener("pointermove", (e) => { if (od) oseek(e); });
+  ov.addEventListener("pointerup", () => { od = false; });
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest && e.target.closest("input, textarea, audio, details")) return;
+    if (e.key === " ") toggle();
+    else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const dir = e.key === "ArrowLeft" ? -1 : 1;
+      if (e.shiftKey) seek((segAt(now()) + dir) * SEG); else seek(now() + dir);
+    } else return;
+    e.preventDefault();
+  });
+  document.querySelectorAll(".dk").forEach((b) => b.addEventListener("click", () => {
+    seek(+b.dataset.seg * SEG); a.play().catch(() => {});
+    document.getElementById("deck").scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  const deep = /t=([\d.]+)/.exec(location.hash);              // #t=95 opens the deck at 95 s
+  if (deep) a.addEventListener("loadedmetadata", () => seek(+deep[1]), { once: true });
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

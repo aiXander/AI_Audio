@@ -9,7 +9,8 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
 - tags the output-column HTML slots with classes so CSS/JS can target them,
 - renders the newest clip as the first card of the history list (_row_player:
   upstream's history-row markup, main-player audio behaviour kept), with the
-  whole output column scrolling as one list (studio.css hides the "Output"
+  whole output column scrolling as one list (the page itself never scrolls: controls and
+  output each scroll on their own, studio.css + studio.js mountRowTop; studio.css hides the "Output"
   heading and upstream's speed / seed stats line); hitting its bottom appends 10 older renders at a time (studio.js
   mountMore, rows from /sa3/library); a LoRA badge on any render that had an
   active LoRA lists them on hover (studio.js loraChip, gen.loras via
@@ -57,6 +58,8 @@ conflict on `git pull`). This launcher imports it, then before `build_ui` runs:
   4608-frame canvas, so a seed keeps its opening when Length changes),
 - adds an Extend button to every clip (extend.py/.js: restore the clip's settings with
   Length + N s and the clip as inpaint reference, then Generate),
+- adds a DJ button to every clip (djview.py/.js: full screen, the dadaspec scrolling right to
+  left under a centre playhead like a Pioneer CDJ, one slider for the seconds in view),
 - turns the Inpaint and Audio → audio inputs into a dadaspec segment editor (segments.py/.js:
   click-drag spans on the input's spectrogram; inpaint regenerates every span, a2a gives
   each span its own noise level),
@@ -107,6 +110,7 @@ import persist  # noqa: E402  (history across reloads)
 import renderq  # noqa: E402  (the render queue modal's routes)
 import anarchy_ui  # noqa: E402  (the Promptless panel: anarchy_ui.js/.css + spec prompts)
 import addons  # noqa: E402  (add-on browser assets merged into CSS/JS)
+import djview  # noqa: E402  (full-screen CDJ-style view of a clip, /sa3/djspec)
 import outdir  # noqa: E402  (switchable output folder: view + render destination)
 import noise  # noqa: E402  (length-stable seeds: noise cropped from one fixed canvas)
 import extend  # noqa: E402  (Extend button: re-render a clip longer, the clip kept as inpaint context)
@@ -250,9 +254,11 @@ def _add_stop_button():
 # ── stop ───────────────────────────────────────────────────────────────────
 # gradio's `cancels=` clears the UI and drops queued renders, but can't interrupt
 # a running sync handler, and the MLX work runs on upstream's single owner
-# thread anyway. So Stop is also cooperative: the sampler checks a flag before
-# every step (and once more before decoding) and raises `Stopped`; nothing is
-# saved, and a new render waits at most one sampler step for the MLX thread.
+# thread anyway. So Stop is also cooperative: a flag is checked before every
+# sampler step, before the encoder / a DiT load, before every decoder chunk and
+# once after the render, raising `Stopped`; nothing is saved, and the MLX thread
+# lets go within one sampler step or decoder chunk (worst case: one step of a
+# long render at CFG ≠ 1, ~10 s; text encoding, ≤ 6 s, has no check).
 #
 # Every Generate/auto-advance click starts a new epoch; the chained pregen
 # (Infinite Radio) inherits the epoch of the click that spawned it. Stop marks
@@ -270,6 +276,38 @@ def _check_stop():
     run = _stop["run"]
     if run is not None and _stop["stopped_upto"] >= run:
         raise Stopped("generation stopped")
+
+
+# SAME-L's decode routinely peaks above 0 dBFS on dense material (+0.1 … +0.8 dB on 21 of 23
+# long renders checked 2026-11-07, composer takes included, even when the a2a/inpaint input was
+# limited to −1 dBFS), and upstream saves with np.clip → int16: hard digital clipping, then MP3
+# encoding turns the flat tops into inter-sample overs (+1 dBTP). So every render passes the
+# composer's master limiter (mixdsp.apply_master: alimiter, 5 ms attack / 50 ms release,
+# lookahead) at OUT_CEILING_DB before it is saved; renders already below it are untouched.
+# The raw decode peak lands in the sidecar as gen.peak_guard.
+OUT_CEILING_DB = -1.0
+
+
+def _peak_guard(res):
+    """(audio (2, T), timings) → same with peaks limited to OUT_CEILING_DB, plus a sidecar note."""
+    try:
+        import numpy as np
+        import mixdsp
+        y = res[0] if isinstance(res, tuple) and res else None
+        if y is None:
+            return res, None
+        y = np.asarray(y, dtype=np.float32)
+        if y.ndim != 2 or y.shape[0] != 2 or not y.size or not np.isfinite(y).all():
+            return res, None
+        pk = float(np.abs(y).max())
+        info = {"raw_peak_db": round(20 * np.log10(max(pk, 1e-9)), 2), "ceiling_db": OUT_CEILING_DB,
+                "limited": pk > 10 ** (OUT_CEILING_DB / 20)}
+        if info["limited"]:
+            res = (mixdsp.apply_master(y, {"limit": True, "ceiling": OUT_CEILING_DB}), *res[1:])
+        return res, info
+    except Exception as e:          # never lose a render over the safety limiter
+        print(f"[sa3lab] peak guard failed: {e}", flush=True)
+        return res, None
 
 
 def _install_stop_hooks():
@@ -294,13 +332,18 @@ def _install_stop_hooks():
             try:
                 _check_stop()       # a stopped chain's pregen dies before T5
                 with segments.active(seg, bound):
-                    return fn(*a, **kw)
+                    out = fn(*a, **kw)
+                _check_stop()       # stopped during the last decode chunk / the kept-audio paste: not saved
+                return out
             finally:
                 _stop["run"] = None
                 library.progress_end()
         res = orig_call(run, *a, **kw)
+        res, guard = _peak_guard(res)
         try:
             _tl.gen = library.gen_record(bound, res[1] if isinstance(res, tuple) else None)
+            if guard:
+                _tl.gen["peak_guard"] = guard
         except Exception as e:      # never break a generation over bookkeeping
             print(f"[sa3lab] gen record failed: {e}", flush=True)
         return res
@@ -317,13 +360,39 @@ def _install_stop_hooks():
         return orig_sample(*a, before_step=bs, **kw)
     up.sample_flow_pingpong = sample
 
+    # The decode is 18-66 s of a long render, built by decode_chunked as one lazy MLX graph and
+    # evaluated in one go, so a Skip/Stop pressed during it used to wait the whole decode out.
+    # Each decoder call (one chunk, ~1-2 s) now evaluates on its own and checks the flag first:
+    # same ops, same output, just a sync point per chunk.
+    class _StoppableDecoder:
+        def __init__(self, model):
+            self._m = model
+
+        def __call__(self, *a, **kw):
+            _check_stop()
+            out = self._m(*a, **kw)
+            up.mx.eval(out)
+            return out
+
+        def __getattr__(self, k):
+            return getattr(self._m, k)
+
     orig_dec = up.get_decoder
 
     def get_decoder(*a, **kw):
         _check_stop()
         library.progress_phase("decode")
-        return orig_dec(*a, **kw)
+        model, *rest = orig_dec(*a, **kw)
+        return (_StoppableDecoder(model), *rest)
     up.get_decoder = get_decoder
+
+    # the other long stretches without a sampler step: SAME-L encode of an a2a / inpaint input
+    # (up to ~10 s) and a DiT load for a new length (~3 s) each check once before starting
+    for name in ("get_encoder", "get_dit"):
+        def checked(*a, _orig=getattr(up, name), **kw):
+            _check_stop()
+            return _orig(*a, **kw)
+        setattr(up, name, checked)
 
     # every render gets a uuid: upstream names files prompt[.cfg…].{seed}, so re-rendering
     # the same prompt + seed (e.g. with a different LoRA) silently overwrote the earlier clip
@@ -382,9 +451,13 @@ def _wire_handlers(demo):
 
     def stop():
         _stop["stopped_upto"] = _stop["epoch"]
+        if renderq.running:
+            renderq.running["stopping"] = True
 
     def skip(epoch):                # Queue modal: stop only the running job, later ones still run
         _stop["stopped_upto"] = max(_stop["stopped_upto"], epoch)
+        if renderq.running and renderq.running["id"] == epoch:
+            renderq.running["stopping"] = True   # the modal shows "stopping…" until it lets go
     renderq.skip_hook = skip
     library.waiting_fn = lambda: renderq.n_waiting(demo)   # "+N queued" counts gradio's real queue
     with demo:   # cancels also drops renders still waiting in gradio's queue (the whole batch)
@@ -523,7 +596,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
-CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl", "lora_link")
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl", "lora_link", "djview")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -890,6 +963,14 @@ def _layout(demo):
     root.children.remove(header)
     top.children[:] = [header, bar, right]
     header.parent = bar.parent = right.parent = top
+    # the page never scrolls (studio.css: each column scrolls on its own), so the footer can't sit
+    # below the columns: it closes the controls column instead
+    footer = next((b for b in blocks if isinstance(b, gr.HTML) and "sa3-footer" in (b.elem_classes or [])), None)
+    ctl = next((c for c in main_row.children if getattr(c, "elem_id", None) == "sa3-ctl"), None)
+    if footer is not None and ctl is not None:
+        footer.parent.children.remove(footer)
+        ctl.children.append(footer)
+        footer.parent = ctl
 
 
 def main():
@@ -916,6 +997,7 @@ def main():
     condsrc.install(persist)            # a multi-anchor render's tensors → <audio>.conds.npz on save
     outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
+    djview.install_routes()
     loras.install_routes()
     renderq.install_routes()
     anarchy_ui.install(up, persist)

@@ -33,10 +33,38 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import threading
 
 import numpy as np
 
 SR = 44100
+
+
+def pipe(cmd: list, data: bytes, check: bool = True) -> tuple[bytes, bytes]:
+    """subprocess.run(cmd, input=data, capture_output=True), ~3× faster on big buffers: run()'s
+    communicate() feeds stdin in PIPE_BUF (512-byte) chunks on macOS, ~200k writes for a 5-min
+    stereo f32 mix; here one thread writes it whole while this one reads stdout. Same bytes out."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    err: list = []
+
+    def feed():
+        try:
+            p.stdin.write(data)
+        except BrokenPipeError:
+            pass
+        finally:
+            p.stdin.close()
+    te = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
+    tw = threading.Thread(target=feed, daemon=True)
+    te.start()
+    tw.start()
+    out = p.stdout.read()
+    tw.join()
+    te.join()
+    p.wait()
+    if check and p.returncode:
+        raise subprocess.CalledProcessError(p.returncode, cmd, out, err[0] if err else b"")
+    return out, (err[0] if err else b"")
 BUTTER4 = (0.5411961, 1.3065630)       # 4th-order Butterworth as two biquads (linear Q)
 BUTTER2 = 0.7071068
 
@@ -99,10 +127,9 @@ def strip_chain(mix: dict | None) -> list[dict]:
 
 
 def _ffmpeg(y: np.ndarray, af: str) -> np.ndarray:
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
-                          "-af", af, "-f", "f32le", "-ac", "2", "-ar", str(SR), "-"],
-                         input=np.ascontiguousarray(y.T).astype(np.float32).tobytes(),
-                         capture_output=True, check=True).stdout
+    raw, _ = pipe(["ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
+                   "-af", af, "-f", "f32le", "-ac", "2", "-ar", str(SR), "-"],
+                  np.ascontiguousarray(y.T).astype(np.float32).tobytes())
     out = np.frombuffer(raw, np.float32).reshape(-1, 2).T.copy()
     n = y.shape[1]
     return out[:, :n] if out.shape[1] >= n else np.pad(out, ((0, 0), (0, n - out.shape[1])))
@@ -165,10 +192,10 @@ def meter(y: np.ndarray) -> dict:
 def lufs(y: np.ndarray) -> float | None:
     if y.shape[1] < SR // 2:
         return None
-    r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
-                        "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
-                       input=np.ascontiguousarray(y.T).astype(np.float32).tobytes(), capture_output=True)
-    txt = r.stderr.decode(errors="ignore")
+    _, err = pipe(["ffmpeg", "-v", "info", "-nostats", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
+                   "-af", "ebur128=framelog=quiet", "-f", "null", "-"],
+                  np.ascontiguousarray(y.T).astype(np.float32).tobytes(), check=False)
+    txt = err.decode(errors="ignore")
     i = txt.rfind("I:")
     try:
         v = float(txt[i + 2:].split("LUFS")[0].strip())

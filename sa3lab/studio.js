@@ -92,6 +92,31 @@
   focusCss.textContent = "body.sa3-focus #sa3-ctl, body.sa3-focus #sa3-split { display: none !important; }" +
     "body.sa3-focus #sa3-out { flex: 1 1 100% !important; max-width: none !important; }";
   document.head.appendChild(focusCss);
+  // The page itself never scrolls: each column (#sa3-ctl, #sa3-out) scrolls on its own, sized in
+  // studio.css from --sa3-row-top, the columns' top edge (below the sticky top bar), kept current here.
+  const lockCss = document.createElement("style");
+  // A narrow window stacks the columns (gradio wraps the row): then the page scrolls as usual.
+  lockCss.textContent = "html.sa3-lock, html.sa3-lock body { height: 100%; overflow: hidden !important; }" +
+    "html:not(.sa3-lock) #sa3-ctl, html:not(.sa3-lock) #sa3-out { max-height: none !important; overflow-y: visible !important; }";
+  document.head.appendChild(lockCss);
+  const syncRowTop = () => {
+    const out = document.getElementById("sa3-out"), ctl = document.getElementById("sa3-ctl");
+    if (!out) return;
+    const o = out.getBoundingClientRect(), c = ctl && ctl.getBoundingClientRect();
+    const stacked = !!(c && c.width && o.top >= c.bottom - 1);
+    document.documentElement.classList.toggle("sa3-lock", !stacked);
+    if (!stacked && document.scrollingElement) document.scrollingElement.scrollTop = 0;   // a locked page can't be scrolled back
+    document.documentElement.style.setProperty("--sa3-row-top", Math.round(out.parentElement.getBoundingClientRect().top) + "px");
+  };
+  let rowTopObs = null;
+  function mountRowTop() {
+    syncRowTop();
+    const top = document.getElementById("sa3-top");
+    if (rowTopObs || !top) return;
+    rowTopObs = new ResizeObserver(syncRowTop);
+    rowTopObs.observe(top);
+    window.addEventListener("resize", syncRowTop);
+  }
   const setFocus = (on) => {
     document.body.classList.toggle("sa3-focus", on);
     localStorage.setItem(FOCUS_KEY, on ? "1" : "");
@@ -215,6 +240,7 @@
     progressLoop(anyBusy);
     mountSplit();
     mountFocus();
+    mountRowTop();
     holdAnchor();                                      // last: every row has its final height now
     newPill();
   }

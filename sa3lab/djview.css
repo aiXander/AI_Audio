@@ -1,0 +1,38 @@
+/* DJ view (djview.js): the button on each clip's label strip + the full-screen CDJ-style view. */
+.sa3-lab .dj { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px;
+  border-radius: 7px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: #a9a9bb;
+  font-size: 11.5px; cursor: pointer; flex: none; }
+.sa3-lab .dj svg { width: 12px; height: 12px; }
+.sa3-lab .dj:hover { color: #e6e1ff; border-color: rgba(155,140,255,0.5); background: rgba(155,140,255,0.12); }
+.sa3-lab .dj + .ex, .sa3-lab .dj + .rs { margin-left: 6px; }
+
+#sa3-dj { position: fixed; inset: 0; z-index: 100000; display: none; flex-direction: column; gap: 10px;
+  padding: 14px 18px 16px; background: #000; color: #e8e8f0; user-select: none;
+  font-family: "JetBrains Mono", ui-monospace, monospace; }
+#sa3-dj.on { display: flex; }
+#sa3-dj .top { display: flex; align-items: center; gap: 14px; min-height: 30px; }
+#sa3-dj .ttl { flex: 1; min-width: 0; font: 500 14px Inter, system-ui, sans-serif; color: #cfcfe0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sa3-dj .st { font-size: 11px; color: #6f6f82; }
+#sa3-dj .x { width: 30px; height: 30px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.04);
+  color: #c9c9d6; font-size: 20px; line-height: 1; cursor: pointer; }
+#sa3-dj .x:hover { color: #fff; border-color: rgba(255,255,255,0.35); }
+#sa3-dj .mainw { flex: 1; min-height: 0; position: relative; border-radius: 4px; overflow: hidden; }
+#sa3-dj canvas.main { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+#sa3-dj canvas.main:active { cursor: grabbing; }
+#sa3-dj canvas.ov { width: 100%; height: 64px; flex: none; cursor: pointer; touch-action: none; }
+#sa3-dj .bar { display: flex; align-items: center; gap: 22px; flex: none; }
+#sa3-dj .pp { width: 46px; height: 46px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); background: transparent;
+  color: #fff; cursor: pointer; display: grid; place-items: center; flex: none; }
+#sa3-dj .pp svg { width: 18px; height: 18px; }
+#sa3-dj .pp.on { border-color: #3fd27a; color: #3fd27a; box-shadow: 0 0 14px rgba(63,210,122,0.35); }
+#sa3-dj .tm { display: flex; flex-direction: column; cursor: pointer; min-width: 150px; }
+#sa3-dj .tm i { font-style: normal; font-size: 10px; letter-spacing: 0.12em; color: #8b8b9c; }
+#sa3-dj .tm b { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; color: #fff; line-height: 1.05; }
+#sa3-dj .bpm { display: flex; align-items: baseline; gap: 6px; min-width: 110px; }
+#sa3-dj .bpm b { font-size: 26px; font-weight: 600; color: #fff; }
+#sa3-dj .bpm i { font-style: normal; font-size: 10px; letter-spacing: 0.12em; color: #8b8b9c; }
+#sa3-dj .zm { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 460px; font-size: 11px; color: #8b8b9c; }
+#sa3-dj .zm input { flex: 1; accent-color: #9b8cff; }
+#sa3-dj .zm b { min-width: 44px; text-align: right; color: #e8e8f0; font-weight: 500; font-size: 13px; }
+#sa3-dj .hint { margin-left: auto; font-size: 11px; color: #55556a; }

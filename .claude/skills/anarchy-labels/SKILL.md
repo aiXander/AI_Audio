@@ -37,7 +37,9 @@ Build a `jobs.json` (list of `{"prompt", "seed", "seconds"}`; format in `enqueue
 
 - **Explore share**: keep about a third of every batch as fresh random directions drawn from a distribution fixed *before* looking at scores (all samplers, T / L ranges as before; `random_batch.py` or random d per sampler). These first looks are the only unbiased data on what works; an all-exploit batch adds nothing to them.
 
-Fix the render settings you are not testing (60 s, cfg 1, steps 8). Write the batch to the scratchpad, not the repo.
+Fix the render settings you are not testing (steps 8; length as the session before). **CFG ≥ 2**: at CFG 1 the conditioning barely registers (2026-11-07 steering tests), so sessions 1–3 (all CFG 1) mostly measured seed luck; session-4 samples CFG 2–5 to find the sweet spot. Keep the generator script + jobs.json in the session folder's `_design/` (outputs/ is gitignored).
+
+**Every session folder has a `context.md`** (Xander's rule): why we ran it, the model/CFG/LoRA/length, the blocks and the question each answers, and what we learned. Write it when you queue the batch; fill in "What we learned" when you analyze its labels. Read the earlier sessions' `context.md` files before designing the next batch.
 
 One batch = one dataset: never mix LoRA and no-LoRA renders in one block. A job without `"loras"` sends empty LoRA slots (a `base` render); `"loras": [{"path": "<file under stable-audio-3/loras/>", "strength": 0.8}]` loads up to 3 (format in `enqueue.py`). Comparing LoRA *files* (checkpoints) only works through fixed (conditioning, seed) pairs rendered at each file, read by ear + `dadagrid.py`, since the analyzer never pools two files. A LoRA experiment (strength sweep, one LoRA vs another) is its own study: ask Xander, and put it in its own output folder (e.g. `outputs/anarchy/<session>-lora-<name>/`) so the sessions stay readable by folder too.
 

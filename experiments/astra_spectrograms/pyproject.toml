@@ -1,0 +1,19 @@
+[project]
+name = "astra-spectrograms"
+version = "0.1.0"
+description = "Turn GPT-6 Astra's imagined spectrogram images back into audio (crop, colour-decode, invert, SA3 cleanup)."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pillow",
+    "matplotlib",
+    "torch==2.14.1",
+    "torchaudio",
+    "vocos",
+    "huggingface_hub",
+    "soundfile",
+]
+
+[tool.uv]
+package = false

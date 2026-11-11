@@ -37,9 +37,12 @@ def _stft_power(y, n_fft, hop):
     if y.shape[-1] < n_fft:
         y = np.pad(y, (0, n_fft - y.shape[-1]))
     win = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(n_fft) / n_fft)).astype(np.float32)
-    frames = np.lib.stride_tricks.sliding_window_view(y, n_fft)[::hop] * win
-    spec = np.fft.rfft(frames, n=n_fft, axis=1)
-    return (spec.real ** 2 + spec.imag ** 2).T.astype(np.float32)
+    view = np.lib.stride_tricks.sliding_window_view(y, n_fft)[::hop]
+    out = np.empty((n_fft // 2 + 1, view.shape[0]), dtype=np.float32)
+    for i in range(0, view.shape[0], 2048):          # chunked: a DJ-view render has ~15k frames
+        spec = np.fft.rfft(view[i:i + 2048] * win, n=n_fft, axis=1)
+        out[:, i:i + 2048] = (spec.real ** 2 + spec.imag ** 2).T
+    return out
 
 
 def _channel(y, sr, hop, n_mels):
@@ -67,11 +70,18 @@ def render_spectrogram_png(pcm_int16, sample_rate=44100, width=None, height=None
     """Drop-in for upstream's spec.render_spectrogram_png; ignores its small
     width/height and renders at full HD. Returns JPEG bytes (browsers sniff the
     format, so upstream's `data:image/png` URI still displays it)."""
+    return render_jpeg(pcm_int16, sample_rate)
+
+
+def render_jpeg(pcm_int16, sample_rate=44100, width=WIDTH, mono=False) -> bytes:
+    """The dadaspec as JPEG, `width` real columns wide (the DJ view, djview.py, asks for
+    ~120 columns/s). `mono` folds it like uiprefs.js does in the browser: L row y averaged
+    with R's mirrored row, one panel, bass at the bottom."""
     if pcm_int16.ndim != 2 or pcm_int16.shape[1] != 2:
         raise ValueError(f"expected (T, 2) PCM, got {pcm_int16.shape}")
     y, sr = _resample_to_32k(pcm_int16, sample_rate)
     n = y.shape[-1]
-    hop = max(MIN_HOP, (max(n - N_FFT, 1)) // (WIDTH - 1) or 1)
+    hop = max(MIN_HOP, (max(n - N_FFT, 1)) // (width - 1) or 1)
 
     S_L, rgb_L = _channel(y[0], sr, hop, N_MELS)
     S_R, rgb_R = _channel(y[1], sr, hop, N_MELS)
@@ -81,10 +91,12 @@ def render_spectrogram_png(pcm_int16, sample_rate=44100, width=None, height=None
     img = np.empty((N_MELS * 2, nf, 3), dtype=np.float32)
     img[:N_MELS] = S_L[:, :, None] * rgb_L[None]     # L on top, bass at the centre line
     img[N_MELS:] = S_R[:, :, None] * rgb_R[None]     # R below, mirrored
+    if mono:
+        img = 0.5 * (img[:N_MELS] + img[N_MELS:][::-1])
     np.clip(img, 0, 1, out=img)
     pil = Image.fromarray((img * 255).astype(np.uint8))
-    if nf != WIDTH:   # only when the clip is too short for one column per hop
-        pil = pil.resize((WIDTH, N_MELS * 2), Image.LANCZOS)
+    if nf != width:   # only when the clip is too short for one column per hop
+        pil = pil.resize((width, img.shape[0]), Image.LANCZOS)
     buf = io.BytesIO()
     pil.save(buf, format="JPEG", quality=92, subsampling=0, optimize=True)
     return buf.getvalue()

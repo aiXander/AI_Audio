@@ -1,0 +1,123 @@
+<!doctype html><html><head><meta charset="utf-8"><title>__TITLE__</title>
+<!-- Template for sa3lab/bench/abpage.py: __DATA__ / __TITLE__ are filled by it. Not blind: labels are shown.
+     Served by abserve.py (http) it loads + auto-saves ab_labels.json; opened as file:// it only plays. -->
+<style>
+:root{--bg:#0e0f13;--card:#171920;--line:#2a2d38;--fg:#e8e8ee;--dim:#9096a6}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,system-ui,sans-serif;margin:0 auto;padding:24px;max-width:1500px}
+h1{font-size:20px;margin:0 0 6px} .dim{color:var(--dim)} code{color:#cfd3e0}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin:14px 0 20px}
+.p{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 18px}
+.card.act{border-color:#555}
+.card h2{font-size:15px;margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card .cnote{font-size:12px;margin:-6px 0 8px}
+.spec{position:relative;cursor:pointer;margin:4px 0 2px;border-radius:4px;overflow:hidden;opacity:.5;transition:opacity .15s}
+.spec.on{opacity:1;outline:2px solid var(--c)} .spec img{display:block;width:100%;height:96px}
+.spec .reg{position:absolute;top:0;bottom:0;border-left:1px dashed #fff8;border-right:1px dashed #fff8;background:#ffffff0d;pointer-events:none}
+.spec .ph{position:absolute;top:0;bottom:0;width:2px;background:#fff;pointer-events:none}
+.spec .tag{position:absolute;left:6px;top:4px;font-weight:700;font-size:12px;padding:1px 6px;border-radius:4px;background:#000a;color:var(--c)}
+button{background:#232632;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}
+button:hover{border-color:#555} button.sel{border-color:var(--c);color:var(--c)}
+.t{font-variant-numeric:tabular-nums;color:var(--dim);min-width:70px}
+.keys{font-size:12px}
+.lab{display:flex;gap:6px;align-items:flex-start;margin:0 0 8px;font-size:12px}
+.lab .sc{display:flex;gap:2px}
+.lab .sc button{padding:1px 7px;font-size:12px;border-radius:4px}
+.lab .sc button.on{background:var(--c);color:#000;border-color:var(--c)}
+.lab textarea{flex:1;min-height:22px;height:22px;resize:vertical;background:#11131a;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-family:inherit;font-size:12px;line-height:1.4}
+.lab textarea:focus{outline:none;border-color:var(--c)}
+#banner{display:none;position:sticky;top:0;z-index:9;background:#7a1f1f;color:#fff;padding:6px 10px;border-radius:6px;margin:0 0 10px;font-size:13px}
+#saved{font-size:12px;color:var(--dim);margin-left:8px}
+.dir textarea{width:100%;min-height:44px;box-sizing:border-box;background:#11131a;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px;line-height:1.4}
+</style></head><body>
+<div id="banner"></div>
+<h1 id="title"></h1><span id="saved"></span>
+<div class="dim" id="note"></div>
+<div class="info" id="info"></div>
+<div class="dir"><textarea id="direction" placeholder="Overall notes on this experiment (saved with the labels)"></textarea></div>
+<div class="keys dim">Score 1-5 + note under each clip (auto-saved) · Click a spectrogram to seek · <b>Tab</b> / <b>Shift-Tab</b> or the buttons switch variant at the same spot · <b>1-9</b> pick a variant · <b>Space</b> play/pause · ↑/↓ change card (keeps the playhead) · <b>J</b> jump to the cue point.</div><br>
+<div id="cards"></div>
+<script>
+const D=__DATA__;
+document.getElementById('title').textContent=D.title||'';
+document.getElementById('note').innerHTML=D.note||'';
+for(const p of D.info||[]){const d=document.createElement('div');d.className='p';
+  d.innerHTML=`<b style="color:${p.color||'#ccc'}">${p.label||''}</b>&nbsp; `;d.appendChild(document.createTextNode(p.text||''));document.getElementById('info').appendChild(d)}
+const cards=[];let act=0;
+const fmtT=t=>t.toFixed(1)+' s';
+function mk(card){
+  const vars=card.variants;
+  const el=document.createElement('div');el.className='card';
+  const h=document.createElement('h2');const ts=document.createElement('span');ts.textContent=card.title||'';h.appendChild(ts);el.appendChild(h);
+  if(card.note){const n=document.createElement('div');n.className='cnote dim';n.textContent=card.note;el.appendChild(n)}
+  const c={el,au:{},sp:{},bt:{},dur:{},keys:vars.map((v,i)=>i),cur:0};
+  const play=document.createElement('button');play.textContent='▶ play';h.appendChild(play);c.play=play;
+  const regs=card.regions??D.regions??[];
+  vars.forEach((v,k)=>{
+    const a=new Audio(v.src);a.preload='auto';c.au[k]=a;c.dur[k]=v.dur;
+    if(vars.length>1){const b=document.createElement('button');b.textContent=v.label;b.style.setProperty('--c',v.color);b.onclick=()=>sw(c,k);h.appendChild(b);c.bt[k]=b}
+    const s=document.createElement('div');s.className='spec';s.style.setProperty('--c',v.color);
+    s.innerHTML=`<img src="${v.spec}">`+regs.map(([a,b])=>`<div class="reg" style="left:${a/v.dur*100}%;width:${(b-a)/v.dur*100}%"></div>`).join('')+`<div class="ph"></div><span class="tag"></span>`;
+    s.querySelector('.tag').textContent=v.label;
+    s.onclick=e=>{const r=s.getBoundingClientRect();sw(c,k,(e.clientX-r.left)/r.width*v.dur,true)};
+    el.appendChild(s);c.sp[k]=s;
+    el.appendChild(labRow(v,card));
+  });
+  const cue=card.jump??D.jump;
+  if(cue!=null){const j=document.createElement('button');j.textContent='⇤ '+fmtT(cue);j.onclick=()=>sw(c,c.cur,cue,true);h.appendChild(j)}
+  c.cue=cue;
+  const t=document.createElement('span');t.className='t';h.appendChild(t);c.t=t;
+  play.onclick=()=>toggle(c);
+  el.addEventListener('click',()=>{act=cards.indexOf(c)});
+  cards.push(c);document.getElementById('cards').appendChild(el);
+}
+// ── labels: {direction, labels: {src: {score, note, card, label}}} in ab_labels.json via abserve.py ──
+const LB={direction:'',labels:{}};const live=location.protocol.startsWith('http');let saveT=null;
+const scorers=[];
+function labRow(v,card){
+  const r=document.createElement('div');r.className='lab';r.style.setProperty('--c',v.color);
+  const sc=document.createElement('div');sc.className='sc';const bs=[];
+  for(let n=1;n<=5;n++){const b=document.createElement('button');b.textContent=n;b.title='score '+n;
+    b.onclick=e=>{e.stopPropagation();const L=ent(v,card);L.score=L.score===n?null:n;paint();save()};sc.appendChild(b);bs.push(b)}
+  const ta=document.createElement('textarea');ta.placeholder=`notes on ${v.label}…`;
+  ta.oninput=()=>{ent(v,card).note=ta.value;ta.style.height='22px';ta.style.height=ta.scrollHeight+2+'px';save()};
+  const paint=()=>{const L=LB.labels[v.src]||{};bs.forEach((b,i)=>b.classList.toggle('on',L.score===i+1));
+    if(document.activeElement!==ta){ta.value=L.note||'';ta.style.height='22px';if(ta.value)ta.style.height=ta.scrollHeight+2+'px'}};
+  scorers.push(paint);r.append(sc,ta);return r;
+}
+function ent(v,card){return LB.labels[v.src]??={score:null,note:'',card:card.title||'',label:v.label}}
+function save(){if(!live)return;clearTimeout(saveT);saveT=setTimeout(async()=>{
+  for(const k in LB.labels){const L=LB.labels[k];if(L.score==null&&!L.note)delete LB.labels[k]}
+  try{const r=await fetch('api/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LB)});
+    if(!r.ok)throw 0;banner('');document.getElementById('saved').textContent='saved '+new Date().toLocaleTimeString()}
+  catch{banner('NOT SAVING: the label server is off. Run: '+(D.serve||'abserve.py <folder>'));saveT=setTimeout(save,3000)}},400)}
+function banner(t){const b=document.getElementById('banner');b.textContent=t;b.style.display=t?'block':'none'}
+async function loadLabels(){
+  const dir=document.getElementById('direction');
+  dir.oninput=()=>{LB.direction=dir.value;save()};
+  if(!live){banner('Opened as a file: notes are not saved. For notes run: '+(D.serve||'abserve.py <folder>')+' and open the URL it prints.');return}
+  try{Object.assign(LB,await (await fetch('api/labels')).json());dir.value=LB.direction||''}
+  catch{banner('NOT SAVING: the label server is off. Run: '+(D.serve||'abserve.py <folder>'))}
+  scorers.forEach(f=>f())}
+function stopAll(except){for(const c of cards)for(const a of Object.values(c.au))if(a!==except)a.pause()}
+function sw(c,k,t,go){
+  const old=c.au[c.cur],was=!old.paused,tt=Math.min(t??old.currentTime,c.dur[k]);
+  old.pause();c.cur=k;const a=c.au[k];a.currentTime=tt;
+  if(was||go){stopAll(a);a.play()}
+}
+function toggle(c){const a=c.au[c.cur];if(a.paused){stopAll(a);a.play()}else a.pause()}
+function ui(c,i){c.el.classList.toggle('act',i===act);
+  for(const k in c.sp){c.sp[k].classList.toggle('on',+k===c.cur);if(c.bt[k])c.bt[k].classList.toggle('sel',+k===c.cur);
+    c.sp[k].querySelector('.ph').style.left=(c.au[k].currentTime/c.dur[k]*100)+'%'}
+  const a=c.au[c.cur];c.play.textContent=a.paused?'▶ play':'❚❚ pause';c.t.textContent=fmtT(a.currentTime)}
+function tick(){cards.forEach(ui);requestAnimationFrame(tick)}
+D.cards.forEach(mk);scorers.forEach(f=>f());loadLabels();
+act=Math.min(D.start_card??0,cards.length-1);tick();
+addEventListener('keydown',e=>{const c=cards[act];if(!c||/^(TEXTAREA|INPUT)$/.test(e.target.tagName))return;
+  if(e.code==='Space'){e.preventDefault();toggle(c)}
+  else if(e.code==='Tab'){e.preventDefault();const n=c.keys.length;sw(c,(c.cur+(e.shiftKey?n-1:1))%n)}
+  else if(/^Digit[1-9]$/.test(e.code)){const k=+e.code.slice(5)-1;if(k<c.keys.length)sw(c,k)}
+  else if(e.code==='ArrowDown'||e.code==='ArrowUp'){e.preventDefault();const was=!c.au[c.cur].paused,t=c.au[c.cur].currentTime;c.au[c.cur].pause();
+    act=Math.max(0,Math.min(cards.length-1,act+(e.code==='ArrowDown'?1:-1)));const n=cards[act];n.el.scrollIntoView({block:'center',behavior:'smooth'});if(was)sw(n,n.cur,t,true)}
+  else if(e.code==='KeyJ'&&c.cue!=null)sw(c,c.cur,c.cue,true)});
+</script></body></html>

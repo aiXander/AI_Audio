@@ -14,7 +14,8 @@ page reload; these routes need `make start`.
                                               + a background deep copy of its outside sources (vault.py)
     POST /sa3/composer/revert {name}        → project.json ← the last ⌘S, built → {layout, project}
     POST /sa3/composer/save {name, project} → writes project.json (autosave), then builds it:
-                                              → {layout} | {layout: null, error}
+                                              → {layout} | {layout: null, error} | {superseded} (a newer
+                                              save arrived while this one waited: only the newest builds)
     GET  /sa3/composer/ref?name=[&spec=1]   → the built reference WAV (what SA3 keeps), or its dadaspec
     POST /sa3/composer/render {name, seeds, section?} → queue one batch (one take per seed) into this
                                               studio's own queue → {job}; section [t0, t1] renders only that
@@ -124,6 +125,10 @@ _rows: dict[str, tuple[float, dict]] = {}
 
 def _lock(name: str) -> threading.Lock:
     return _locks.setdefault(name, threading.Lock())
+
+
+_gen: dict[str, int] = {}           # project → its newest autosave (coalesced: see save)
+_gen_lock = threading.Lock()
 
 
 def _dir(name: str) -> Path:
@@ -271,12 +276,20 @@ def _has_pieces(proj: dict) -> bool:
             or bool((proj.get("cond") or {}).get("keys") and proj.get("length")))
 
 
-def save(name: str, proj: dict, build: bool = True) -> dict:
+def save(name: str, proj: dict, build: bool = True, coalesce: bool = False) -> dict:
+    """`coalesce` (the page's autosave): a save still waiting on the lock when a newer one arrives
+    is skipped ({superseded: true}, nothing written): quick edits (mute, mute, unmute) build once,
+    for the newest state, instead of queueing one full build each."""
     import compose
     d = _dir(name)
     d.mkdir(parents=True, exist_ok=True)
     proj = {k: v for k, v in proj.items() if not k.startswith("_")} | {"name": name}
+    if coalesce:
+        with _gen_lock:
+            gen = _gen[name] = _gen.get(name, 0) + 1
     with _lock(name):
+        if coalesce and _gen.get(name) != gen:
+            return {"superseded": True}
         _write(d / "project.json", proj)
         if not build or not _has_pieces(proj):
             return {"layout": None}
@@ -835,7 +848,7 @@ def install_routes() -> None:
         import anyio
         try:
             r = await anyio.to_thread.run_sync(lambda: save(b.get("name", ""), b.get("project") or {},
-                                                            b.get("build", True)))
+                                                            b.get("build", True), coalesce=True))
         except ValueError as e:
             r = {"error": str(e)}
         return JSONResponse(r)

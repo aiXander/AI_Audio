@@ -140,8 +140,14 @@ body.sa3-busy #sa3-stop:hover { background: rgba(255,90,110,0.16) !important; bo
 #sa3-stop::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
 
 /* ── output column ────────────────────────────────── */
-/* the newest clip's card (.sa3-player) + the history are one list: the sticky column scrolls as a whole */
-#sa3-out { position: sticky; top: 56px; align-self: flex-start; max-height: calc(100vh - 68px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+/* One scrollbar per column, never the page: studio.js locks html/body (no document scroll) and sets
+   --sa3-row-top (where the columns start, below the top bar). The controls (#sa3-ctl, footer last)
+   and the output list (newest clip's card + the history) each scroll on their own, down to the
+   window's bottom edge. A page scroll on top of the list's own was two nested scrollbars, with the
+   list's bottom hidden until the page was scrolled too. */
+#sa3-ctl, #sa3-out { align-self: flex-start; max-height: calc(100vh - var(--sa3-row-top, 100px) - 12px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+#sa3-ctl { flex-wrap: nowrap !important; }
+#sa3-ctl > * { flex-shrink: 0; }
 #sa3-out { overflow-anchor: none; }   /* studio.js holdAnchor() keeps the list still; Chrome's own anchoring would double-correct */
 #sa3-out { flex-wrap: nowrap !important; }   /* with a max-height, a wrapping column would push the history into an off-screen 2nd column */
 #sa3-out > * { flex-shrink: 0; }

@@ -76,8 +76,9 @@ export class CurveLane {
   snapU(u, free, h) {
     if (free) return C.clamp(u, 0, 1);
     const tol = 6 / Math.max(1, h);
-    for (const v of [...this.o.detents, this.brush]) if (Math.abs(u - v) < tol) return v;
-    return C.clamp(Math.round(u * 100) / 100, 0, 1);
+    let best = null, bd = tol;                       // the nearest detent in reach (detents can sit closer than 2·tol)
+    for (const v of [...this.o.detents, this.brush]) { const d = Math.abs(u - v); if (d < bd) { bd = d; best = v; } }
+    return best != null ? best : C.clamp(Math.round(u * 100) / 100, 0, 1);
   }
   // ── selection ──
   selBox() { return this.sel && this.sel.kind === "p" ? C.boxes(this.K).find((b) => Math.abs(b.a - this.sel.a) < 1e-3) || null : null; }

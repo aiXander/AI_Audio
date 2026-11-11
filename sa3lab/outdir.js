@@ -19,12 +19,17 @@
     if (b) b.querySelector("span").textContent = state.active || "…";
     if (pop && pop.classList.contains("open")) build();
   }
-  function build() {
-    pop.innerHTML = `<div class="od-h">Output folder <span>view + destination of new renders</span></div>
-      <div class="od-list">${state.folders.map((f) => `
+  const rows = () => state.folders.map((f) => `
         <button type="button" class="od-row${f.rel === state.active ? " on" : ""}" data-rel="${esc(f.rel)}">
           <span class="od-name">${esc(f.rel)}</span><span class="od-end"><span class="sa3-cp od-cp" role="button"
-            data-copy="${esc(absPath(f.rel))}" title="Copy full path">${COPY}</span><span class="od-n">${f.n}</span></span></button>`).join("")}</div>
+            data-copy="${esc(absPath(f.rel))}" title="Copy full path">${COPY}</span><span class="od-n">${f.n}</span></span></button>`).join("");
+  function build() {
+    // already built: swap only the folder rows, so a half-typed new-folder name and the list's
+    // scroll position survive the live refresh below
+    const list = pop.querySelector(".od-list");
+    if (list) { const html = rows(); if (list.dataset.html !== html) { list.innerHTML = html; list.dataset.html = html; } return; }
+    pop.innerHTML = `<div class="od-h">Output folder <span>view + destination of new renders</span></div>
+      <div class="od-list">${rows()}</div>
       <form class="od-new"><input type="text" placeholder="new folder, e.g. anarchy/my-session" spellcheck="false">
         <button type="submit">Create</button></form>
       <div class="od-foot">Renders already queued keep their folder.</div>`;
@@ -59,6 +64,7 @@
     }
     const open = want === undefined ? !pop.classList.contains("open") : want;
     if (open) {
+      pop.innerHTML = "";        // fresh popover each open (clears an old error line)
       build();
       const b = document.getElementById("sa3-dirbtn").getBoundingClientRect();
       pop.style.top = (b.bottom + 6) + "px";
@@ -119,5 +125,8 @@
   refresh();
   setInterval(mount, 700);
   setInterval(live, 4000);
+  // folder list + render counts stay live while the popover is open (a folder a script just
+  // rendered into, or one made in another tab, appears without closing and reopening it)
+  setInterval(() => { if (pop && pop.classList.contains("open") && !document.hidden) refresh(); }, 3000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) live(); });
 }

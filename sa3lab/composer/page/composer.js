@@ -27,6 +27,7 @@
 // in time, layered, and the originals stay. The "+ Track" lane under the tracks adds a track (click its label; its body is a drop target only); right-click a track → Delete track removes it with its clips (confirm modal, deleteTrack). Clips cut from a take, and a promoted base, read the take's frozen copy in clips/
 // (server.freeze), so trashing the take later never changes the timeline. Right-click a clip: Split here. Every edit autosaves
 // project.json and rebuilds the reference; the build's layout comes back and the page redraws.
+// Playback never waits on that build (mixPieces: mute / solo / delete are heard at once).
 //
 // The BPM is never set by hand: the server's live consensus over every clip on the tracks
 // (compose.tempo_consensus); the BPM popover lists each clip's reading against it, furthest first.
@@ -190,11 +191,6 @@ function sample(keys, t) {                  // compose._sample / segments.frame_
 }
 
 // ── layout: the server's build, or a naive guess while it runs ──────────────────────────────
-function fresh(L) {
-  if (!L) return false;
-  const act = activeIdx();
-  return L.pieces.length === act.length && L.pieces.every((pc) => act.includes(pc.pi) && pieces()[pc.pi] && pieces()[pc.pi].id === pc.id);
-}
 function activeIdx() {
   const ps = pieces(), on = (p) => !trackMuted(p.track || 0), solo = ps.some((p) => p.solo && on(p));   // a muted track beats solo
   return ps.map((p, i) => [p, i]).filter(([p]) => on(p) && !(p.mute || (solo && !p.solo))).map(([, i]) => i);
@@ -444,18 +440,53 @@ function runOf(ks, i) {                      // the block keypoint i belongs to:
   while (hi + 1 < ks.length && akey(ks[hi + 1].anchor) === akey(ks[i].anchor)) hi++;
   return [lo, hi];
 }
+// The keypoints the lane's handles edit: the project's own in Keypoints mode, else the build's
+// curves as keypoints (autoKeys, once per build), so a block's ◆ edges, ⟷ fades and ⠿ grip drag in
+// Auto / One-anchor mode too (e.g. a clip's override from right-click → Replace). The first such
+// drag turns the lane into Keypoints mode (condLane's onMarker): the conditioning stops following the clips.
+let akMemo = { lay: null, ks: [] };
+function editKeys() {
+  const ks = condKeys();
+  if (ks.length || condMode() === "keys") return ks;
+  if (akMemo.lay !== S.layout) akMemo = { lay: S.layout, ks: autoKeys() || [] };
+  return akMemo.ks;
+}
+const condDrag = () => { const d = tl.drag; return d && d.kind === "marker" && d.p && d.lane && d.lane.key === "cond" ? d : null; };
+// keypoints with block lo..hi shifted by dt, its fades along with it (the keypoint just outside each
+// end moves too, so the neighbours fill in behind it / give way ahead), clamped so no keypoint
+// passes the next one out
+function movedBlock(ks, lo, hi, dt) {
+  const a = Math.max(0, lo - 1), b = Math.min(ks.length - 1, hi + 1);
+  const min = (a > 0 ? ks[a - 1].t + 0.05 : 0) - ks[a].t, max = (b + 1 < ks.length ? ks[b + 1].t - 0.05 : condLen()) - ks[b].t;
+  const d = Math.max(Math.min(min, 0), Math.min(Math.max(max, 0), dt));
+  return ks.map((k, j) => (j >= a && j <= b ? { ...k, t: +(k.t + d).toFixed(3) } : k));
+}
+// a block grip dragged to t: its Δt, the block's start (else end) caught by a clip edge, else its start on the grid
+function gripDt(m, t) {
+  const dt = t - m.t, lane = { snapTo: clipEdges }, es = tl.edgeSnap(m.t0 + dt, lane), ee = es == null ? tl.edgeSnap(m.t1 + dt, lane) : null;
+  return es != null ? es - m.t0 : ee != null ? ee - m.t1 : tl.snap(m.t0 + dt) - m.t0;
+}
 function liveKeys() {                        // the keypoints with an in-flight drag on the lane applied
-  const ks = condKeys(), d = tl.drag;
-  if (!d || d.kind !== "marker" || !d.p || !d.lane || d.lane.key !== "cond") return ks;
+  const ks = editKeys(), d = condDrag();
+  if (!d) return ks;
   if (d.m.shape === "fade") return withFade(ks, d.m.i, fadeW(d.m, d.p[0]));
+  if (d.m.shape === "grip") return movedBlock(ks, d.m.i, d.m.hi, gripDt(d.m, d.p[0]));
   return ks.map((k, j) => (j === d.m.i ? { ...k, t: d.p[0] } : k)).sort((a, b) => a.t - b.t);
 }
 function condMarkers() {
-  const ks = condKeys(), col = keyColors(ks);
+  const ks = editKeys(), col = keyColors(ks);
+  const auto = !condKeys().length ? "\n(dragging switches the lane to Keypoints mode: it stops following the clips)" : "";
   const out = ks.map((k, i) => ({ id: "k" + i, i, t: k.t, color: col.get(akey(k.anchor)), cut: !!k.cut,
-    tip: `${short(anchorLabel(k.anchor), 200)}\nkeypoint ${i + 1} · ${fmt(k.t)}: full strength here\ndrag: move · click: settings · right-click: edit / replace` }));
+    tip: `${short(anchorLabel(k.anchor), 200)}\nkeypoint ${i + 1} · ${fmt(k.t)}: full strength here\ndrag: move / trim · ${auto ? "" : "click: settings · "}right-click: edit / replace${auto}` }));
   for (const f of fades(ks)) out.push({ id: "f" + f.i, i: f.i, t: f.c, w0: f.w, shape: "fade", free: true, color: col.get(akey(ks[f.i + 1].anchor)),
-    tip: `${f.cut ? "Hard cut" : "Fade over " + lenTxt(f.w)}: ${short(anchorLabel(ks[f.i].anchor), 50)} → ${short(anchorLabel(ks[f.i + 1].anchor), 50)}\ndrag → : longer, more gradual · drag ← : shorter, sharper (all the way: a hard cut)\nright-click: fade presets` });
+    tip: `${f.cut ? "Hard cut" : "Fade over " + lenTxt(f.w)}: ${short(anchorLabel(ks[f.i].anchor), 50)} → ${short(anchorLabel(ks[f.i + 1].anchor), 50)}\ndrag → : longer, more gradual · drag ← : shorter, sharper (all the way: a hard cut)\nright-click: fade presets${auto}` });
+  for (let i = 0; i < ks.length;) {          // a ⠿ grip under each block that can move (not muted, not the whole lane)
+    const [lo, hi] = runOf(ks, i);
+    if (hi > lo && !isMuted(ks[lo].anchor) && !(lo === 0 && hi === ks.length - 1))
+      out.push({ id: "g" + lo, i: lo, hi, t: (ks[lo].t + ks[hi].t) / 2, t0: ks[lo].t, t1: ks[hi].t, shape: "grip", free: true, color: col.get(akey(ks[lo].anchor)),
+        tip: `${short(anchorLabel(ks[lo].anchor), 120)}\n${fmt(ks[lo].t)} – ${fmt(ks[hi].t)}\ndrag: move the block (its fades come along; snaps to clip edges / beats) · its ◆ ends trim it${auto}` });
+    i = hi + 1;
+  }
   return out;
 }
 function condTipAt(t) {                      // the lane's hover tooltip: what conditions this moment
@@ -472,7 +503,7 @@ function condTipAt(t) {                      // the lane's hover tooltip: what c
     + "\n\nright-click: edit / replace / add a keypoint · drag: a new source over a span";
 }
 function drawKeys(g, r, t) {
-  const ks = liveKeys(), col = keyColors(condKeys()), L = condLen();
+  const ks = liveKeys(), col = keyColors(editKeys()), L = condLen();
   const x0 = Math.max(r.x, t.x(0)), x1 = Math.min(r.x + r.w, t.x(L)), top = r.y + 3, h = r.h - 6;
   for (let x = x0; x < x1; x += 2) {
     let y = top + h;
@@ -483,8 +514,8 @@ function drawKeys(g, r, t) {
       y -= w * h;
     }
   }
-  const d = t.drag;                           // a fade handle in flight: where its keypoints land + its length
-  if (d && d.kind === "marker" && d.p && d.lane && d.lane.key === "cond" && d.m.shape === "fade") {
+  const d = condDrag();                       // a fade handle in flight: where its keypoints land + its length
+  if (d && d.m.shape === "fade") {
     const w = fadeW(d.m, d.p[0]), cy = r.y + r.h / 2;
     g.strokeStyle = "#fff"; g.lineWidth = 1.2;
     for (const j of [d.m.i, d.m.i + 1]) {
@@ -499,7 +530,7 @@ function drawKeys(g, r, t) {
   }
 }
 function drawCond(g, r, t) {
-  if (condKeys().length) return drawKeys(g, r, t);
+  if (condKeys().length || condDrag()) return drawKeys(g, r, t);
   const c = S.layout && S.layout.cond;
   if (!c || !c.anchors.length) {
     g.fillStyle = "#6d6d7c"; g.font = "11.5px Inter"; g.fillText(S.error ? "build error: see the status chip" : "built conditioning shows here", r.x + 12, r.y + r.h / 2);
@@ -698,13 +729,24 @@ function lanes() {
     onClick: (t) => seek(t),
     onDraw: (a, b, e) => condSpanMenu(e, a, b),
     snapTo: clipEdges,
-    onMarker: (m, t) => edit((p) => {
-      if (m.shape === "fade") { p.cond.keys = withFade(p.cond.keys, m.i, fadeW(m, t)); S.sel = "k" + (m.i + 1); tl.sel = S.sel; return; }
-      const k = p.cond.keys[m.i];
-      k.t = +t.toFixed(3); p.cond.keys.sort((a, b) => a.t - b.t);
-      if (S.sel === m.id) { S.sel = "k" + p.cond.keys.indexOf(k); tl.sel = S.sel; }
-    }),
-    onMarkerClick: (m) => { S.sel = m.shape === "fade" ? "k" + (m.i + 1) : m.id; tl.sel = S.sel; inspector(); } });
+    onMarker: (m, t) => {
+      const auto = !condKeys().length, ks0 = editKeys();
+      if (!ks0.length) return;
+      edit((p) => {
+        if (auto) p.cond = { ...(p.cond || {}), gap: "keys", keys: ks0.map((k) => ({ ...k })) };   // the handles' keypoints become the project's
+        if (m.shape === "fade") { p.cond.keys = withFade(p.cond.keys, m.i, fadeW(m, t)); S.sel = "k" + (m.i + 1); tl.sel = S.sel; return; }
+        if (m.shape === "grip") { p.cond.keys = movedBlock(p.cond.keys, m.i, m.hi, gripDt(m, t)); S.sel = "k" + m.i; tl.sel = S.sel; return; }
+        const k = p.cond.keys[m.i];
+        k.t = +t.toFixed(3); p.cond.keys.sort((a, b) => a.t - b.t);
+        if (S.sel === m.id) { S.sel = "k" + p.cond.keys.indexOf(k); tl.sel = S.sel; }
+      });
+      inspector();
+      if (auto) toast("Conditioning switched to Keypoints mode: it no longer follows the clips (⌘Z undoes). Drag a ◆ to trim, the ⠿ grip to move a block.", { ms: 6000 });
+    },
+    onMarkerClick: (m) => {
+      if (!condKeys().length) { tl.sel = S.sel = null; inspector(); return; }   // Auto mode's handles: nothing to inspect until one is dragged
+      S.sel = m.shape === "fade" ? "k" + (m.i + 1) : m.shape === "grip" ? "k" + m.i : m.id; tl.sel = S.sel; inspector();
+    } });
   if (shown("ref")) out.push({ key: "ref", label: "Reference", sub: "violet = generated", flex: 0.8, items: [], tip: "the built reference: the summed mix SA3 keeps where the strength is 0 (hatched = rewritten)",
     draw: (g, r, t) => {
       if (!S.layout) return;
@@ -1400,6 +1442,7 @@ async function saveNow() {
   const seq = ++S.saveSeq;
   try {
     const r = await api.post("/sa3/composer/save", { name: S.name, project: S.proj });
+    if (r.superseded && seq === S.saveSeq) { S.saving = false; status(); return; }   // only another tab's newer save can do this
     if (seq !== S.saveSeq) return;
     S.error = r.error || null;
     if (r.layout) S.layout = r.layout;
@@ -1435,11 +1478,34 @@ function syncMixer() {
   mixer.setPreview(pv);
   const k = JSON.stringify(pv);
   if (k !== pvKey) { const restart = pvKey && mixer.playing; pvKey = k; if (restart) mixer.restart().then(playBtn); }   // continues seamlessly from where it is
-  if (!S.layout || !fresh(S.layout)) return;
-  mixer.setPieces(S.layout.pieces.filter((pc) => pc.audio_key && pieces()[pc.pi]).map((pc) => ({ key: "p" + pc.pi, url: pieceUrl(pc.audio_key), at: geom(pc.pi).at - (pc.pre || 0), dur: pc.dur, mix: stripMix(pieces()[pc.pi]),
-    ...(() => { const K = trackMix(pieces()[pc.pi].track || 0).env; const sm = envSmooth(pc.pi);
+  if (!S.proj) return;
+  mixer.setPieces(mixPieces().map(({ pi, pc, at }) => ({ key: "p" + pi, url: pieceUrl(pc.audio_key), at: at - (pc.pre || 0), dur: pc.dur, mix: stripMix(pieces()[pi]),
+    ...(() => { const K = trackMix(pieces()[pi].track || 0).env; const sm = envSmooth(pi);
       return K && K.length ? { env: (t) => envGain(K, t, sm), envBreaks: K.map((x) => x[0]), envSig: JSON.stringify(K) + sm } : {}; })() })));
   mixer.setMaster(S.proj.master);
+}
+// What the monitor plays, without waiting for the build: every active clip's built audio, from the
+// current build when it holds the clip, else from the last build that did (BUILT: clip content →
+// that build's piece). So mute / solo / unmute / delete are heard at once; the build that follows
+// only refines it (beat snap, crossfade handles against the new neighbours, BPM). A clip no build has
+// seen yet (just dropped, re-trimmed) stays silent until its build lands.
+const BUILT = new Map();
+const builtKey = (id, src, speed, fix, fade) => JSON.stringify([S.name, id, (src || []).map((x) => +(+x).toFixed(3)), speed || 1, fix || null, fade ?? null]);
+function mixPieces() {
+  const L = S.layout, ps = pieces(), out = [];
+  if (L) for (const pc of L.pieces) if (pc.audio_key) BUILT.set(builtKey(pc.id, pc.src, pc.speed, pc.fix, pc.fade), pc);
+  for (const pi of activeIdx()) {
+    const it = ps[pi];
+    let pc = L && L.pieces.find((x) => x.pi === pi && x.id === it.id && x.audio_key), at;
+    if (pc) at = geom(pi).at;
+    else {
+      pc = BUILT.get(builtKey(it.id, it.src, it.speed, it.fix, it.fade));
+      if (!pc) continue;
+      at = pc.at_req != null && Math.abs(pc.at_req - (it.at || 0)) < 1e-3 ? pc.at : (it.at || 0);
+    }
+    out.push({ pi, pc, at });
+  }
+  return out;
 }
 let raf = 0;
 function tick() {
@@ -1453,7 +1519,7 @@ function tick() {
 }
 async function playMix(t0) {
   player.stop();
-  if (!S.layout || !fresh(S.layout)) return toast("Nothing built yet (or still building).");
+  if (!mixPieces().length && (S.saving || !S.layout)) return toast(S.saving ? "Still building the mix: ▶ again in a moment." : "Nothing built yet.");
   if (!isMix()) S.src = "mixp";
   syncMixer();
   await mixer.play(t0, { onEnd: () => { tl.setPlayhead(S.cursor); } });
@@ -1519,8 +1585,14 @@ const fmtSteps = (u) => {                                              // "2/8 s
   if (p < 0.005) return `${N - held}/${N} steps free`;
   return `${N - held - 1}/${N} steps free + 1 at ${Math.round((1 - p) * 100)}%`;
 };
-// whole-step strengths: where a drag catches, so a plain drag lands on an exact step count (⇧ = free)
-const stepDetents = () => { const N = nSteps(), out = [0, 1]; for (let k = 1; k < 0.625 * N; k++) out.push(+(k / (0.625 * N)).toFixed(4)); return out; };
+// where a drag catches (⇧ = free): a 0.05 grid plus the whole-step strengths, so a plain drag lands on
+// a round value or an exact step count (at Steps 8 / 16 the step strengths sit on the grid anyway)
+const stepDetents = () => {
+  const N = nSteps(), out = new Set();
+  for (let k = 0; k <= 20; k++) out.add(+(k / 20).toFixed(4));
+  for (let k = 1; k < 0.625 * N; k++) out.add(+(k / (0.625 * N)).toFixed(4));
+  return [...out];
+};
 const rw = new CurveLane(tl, {                // the Rewrite lane's strength curve (project.json `rewrite`)
   fmtU: (u) => `${u.toFixed(2)} (${fmtSteps(u)})`,   // the drag readout + hover tips show the denoise steps it frees
   detents: stepDetents(),                     // re-set on every paint (they follow Steps)
@@ -1642,6 +1714,7 @@ function paint() {
   $("dit").value = (p.model && p.model.dit) || "medium";
   $("steps").value = (p.model && p.model.steps) || 8;
   $("cfg").value = (p.model && p.model.cfg) ?? 1;
+  $("fmt").value = (p.model && p.model.format) === "wav" ? "wav" : "mp3";
   if (document.activeElement !== $("seed")) $("seed").value = Number.isInteger(p.model && p.model.seed) ? p.model.seed : "";
   const lo = (p.model && p.model.loras) || [], ls = loraStack();
   if (JSON.stringify(lo) !== JSON.stringify(ls.value)) ls.set(lo);
@@ -2601,6 +2674,11 @@ $("seed").onchange = () => edit((p) => {     // empty = random every render (no 
   p.model = m;
 });
 $("cfg").onchange = () => edit((p) => { p.model = { ...(p.model || {}), cfg: Math.max(0, Math.min(10, +$("cfg").value || 0)) }; });
+$("fmt").onchange = () => edit((p) => {     // takes' file type → compose.generate_args (mp3 = no key)
+  const m = { ...(p.model || {}) };
+  if ($("fmt").value === "wav") m.format = "wav"; else delete m.format;
+  p.model = m;
+});
 $("steps").onchange = () => edit((p) => { p.model = { ...(p.model || {}), steps: Math.max(4, Math.min(16, +$("steps").value || 8)) }; });
 $("nseeds").value = prefs.nseeds || 2;
 $("nseeds").oninput = () => { prefs.nseeds = +$("nseeds").value; savePrefs(); paint(); };

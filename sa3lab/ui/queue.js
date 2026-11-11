@@ -97,12 +97,13 @@ function qRow(job, i) {
   d.dataset.id = job.id;
   const pr = p.prompt ? esc(p.prompt) : "<i>(no prompt)</i>";
   const acts = run
-    ? `<button class="skip" title="Stop this render only; the next job starts right away">Skip</button>`
+    ? (job.stopping ? `<button class="skip" disabled title="Stops at the next sampler step or decoder chunk (a few seconds); nothing is saved">stopping…</button>`
+      : `<button class="skip" title="Stop this render only; the next job starts right away">Skip</button>`)
     : `<button class="up" title="Move up"${i === 0 ? " disabled" : ""}>▲</button>
        <button class="dn" title="Move down"${i === qData.waiting.length - 1 ? " disabled" : ""}>▼</button>
        <button class="del" title="Remove from the queue">${ICON_TRASH}</button>`;
   d.innerHTML = `
-    <div class="hd">${run ? '<span class="now">rendering</span>' : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
+    <div class="hd">${run ? `<span class="now">${job.stopping ? "stopping" : "rendering"}</span>` : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
     <div class="bd"><div class="pr" title="${esc(p.prompt || "")}">${pr}</div><div class="ch">${qChips(p)}</div></div>
     <div class="ac">${acts}</div>`;
   if (!run) d.draggable = true;
@@ -166,7 +167,7 @@ function buildQueue() {
     if (!b || !row || b.disabled) return;
     const id = row.classList.contains("run") ? qData.running && qData.running.id : row.dataset.id;
     const i = qData.waiting.findIndex((j) => j.id === row.dataset.id);
-    if (b.classList.contains("skip")) { b.disabled = true; qPost({ op: "skip", id }); }
+    if (b.classList.contains("skip")) { b.disabled = true; b.textContent = "stopping…"; qPost({ op: "skip", id }); }
     else if (b.classList.contains("del")) { row.classList.add("gone"); qPost({ op: "delete", id }); }
     else if (b.classList.contains("up")) qPost({ op: "move", id, to: i - 1 });
     else if (b.classList.contains("dn")) qPost({ op: "move", id, to: i + 1 });

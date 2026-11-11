@@ -20,7 +20,9 @@ A job is {"id", "preview": {prompt, dit, decoder, seconds, steps, seed, cfg, …
 Deleting does what gradio's own POST /cancel does for an event: take it out of the
 queue, then push a "process_completed" message so the browser tab stops waiting
 for it (its pending spinner clears). Skip reuses the cooperative Stop flag
-(studio.py): it marks only the running job's epoch stopped, so later jobs run.
+(studio.py): it marks only the running job's epoch stopped, so later jobs run. The
+render notices within one sampler step or one decoder chunk (a few seconds); until it does,
+the running job carries `stopping: true` and the modal shows "stopping…".
 """
 from __future__ import annotations
 

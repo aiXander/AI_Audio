@@ -10,7 +10,8 @@ pieces cut from renders → one reference WAV + a segments box → takes rendere
 
     {"name": "demo", "seeds": [1, 2, 3], "length": null, "bpm": null, "key": null, "lufs": null,
      "model": {"dit": "medium", "decoder": "same-l", "steps": 8, "cfg": 1.0,
-               "seed": 42},   # page-only: Render settings → Seed; takes get seed, seed + 1, … (absent = random per take)
+               "seed": 42,    # page-only: Render settings → Seed; takes get seed, seed + 1, … (absent = random per take)
+               "format": "wav"},   # Render settings → File: takes saved as 16-bit WAV (absent = MP3 V0)
      "pieces": [{"id": <render id>, "src": [s0, s1], "at": t, "track": 0,
                  "align": true, "speed": 1.0, "mute": false, "solo": false, "fade": [0.01, 0.01],
                  "xfade": {"len": 0.5, "shape": "eq" | "lin"},   # the crossfade into this clip (below)
@@ -201,12 +202,31 @@ def decode(path: Path, t0: float = 0.0, dur: float | None = None, tempo_k: float
 
 
 def write_wav(path: Path, y: np.ndarray) -> None:
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
-                    "-c:a", "pcm_f32le", str(path)], input=np.ascontiguousarray(y.T).astype(np.float32).tobytes(),
-                   check=True)
+    mixdsp.pipe(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",   # ffmpeg, not a hand-written
+                 "-c:a", "pcm_f32le", str(path)], np.ascontiguousarray(y.T).astype(np.float32).tobytes())   # header: ref_sha256 must not drift
 
 
 def read_wav(path: Path) -> np.ndarray:
+    """write_wav's own files (stereo f32 at SR) straight from disk, ~20× faster than an ffmpeg decode;
+    anything else goes through decode()."""
+    b = Path(path).read_bytes()
+    if b[:4] == b"RIFF" and b[8:12] == b"WAVE":
+        i, fmt = 12, None
+        while i + 8 <= len(b):
+            cid, n = b[i:i + 4], int.from_bytes(b[i + 4:i + 8], "little")
+            if cid == b"fmt ":
+                tag, ch, sr = (int.from_bytes(b[i + 8:i + 10], "little"), int.from_bytes(b[i + 10:i + 12], "little"),
+                               int.from_bytes(b[i + 12:i + 16], "little"))
+                bits = int.from_bytes(b[i + 22:i + 24], "little")
+                if tag == 0xFFFE and n >= 26:          # WAVE_FORMAT_EXTENSIBLE: the sub-format's tag
+                    tag = int.from_bytes(b[i + 32:i + 34], "little")
+                fmt = (tag, ch, sr, bits)
+            elif cid == b"data":
+                if fmt == (3, 2, SR, 32):
+                    n = min(n, len(b) - i - 8) // 8 * 8
+                    return np.frombuffer(b, np.float32, n // 4, i + 8).reshape(-1, 2).T.copy()
+                break
+            i += 8 + n + (n & 1)
     return decode(path)
 
 
@@ -1254,7 +1274,7 @@ def generate_args(api_n: int, prompt: str, seconds: float, seed: int, model: dic
     steps = int(model.get("steps", 8))
     vals = [model.get("dit", "medium"), model.get("decoder", "same-l"), prompt, "", float(seconds), steps,
             str(seed), float(model.get("cfg", 1.0)), float(model.get("apg", 1.0)), 1.0, 0.92,
-            None, handle_file(ref), 0, 0, [], "Save to MP3 (V0)"]
+            None, handle_file(ref), 0, 0, [], "Save to WAV" if model.get("format") == "wav" else "Save to MP3 (V0)"]
     vals += loras.to_slots(model.get("loras"), steps)
     vals += [outdir, json.dumps(box)]
     if len(vals) != api_n:
@@ -1508,26 +1528,32 @@ def submit_windows(proj: dict, b: dict, url: str, outdir: str | None, window: in
             at = int(round((a + ctx / 2) * SR))
             y = _stitch_xf(y, nxt[:, int(round(ctx / 2 * SR)) - int(0.5 * SR):], at, int(0.5 * SR))
         y = y[:, :int(round(b["length"] * SR))]
+        y = mixdsp.apply_master(y, {"limit": True, "ceiling": -1.0})   # crossfades can re-peak (studio OUT_CEILING_DB)
         stem = f"composer {proj['name']} {name} windows.{seed}.{hashlib.sha1(str(time.time()).encode()).hexdigest()[:8]}"
         wav = out_dir / f"{stem}.wav"
-        mp3 = out_dir / f"{stem}.mp3"
-        write_wav(wav, y)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-q:a", "0", str(mp3)], check=True)
-        wav.unlink()
-        condsrc.copy_bank(ps[0][0], mp3, box["cond"]["curves"])   # window 1 resolved every anchor
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(SR), "-ac", "2", "-i", "-",
+                        "-c:a", "pcm_s16le", str(wav)], input=np.ascontiguousarray(y.T).astype(np.float32).tobytes(),
+                       check=True)
+        if model.get("format") == "wav":          # Render settings → File: WAV (lossless, ~10 MB/min)
+            take = wav
+        else:
+            take = out_dir / f"{stem}.mp3"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(wav), "-q:a", "0", str(take)], check=True)
+            wav.unlink()
+        condsrc.copy_bank(ps[0][0], take, box["cond"]["curves"])   # window 1 resolved every anchor
         import base64
         pcm = (np.clip(y, -1, 1) * 32767).astype(np.int16).T
         spec = base64.b64encode(hispec.render_spectrogram_png(pcm, SR)).decode("ascii")
         comp = {**box["composite"], "variant": f"{name} windows",
                 "windows": [{"id": render_id(p), "t0": a, "t1": z} for p, a, z in ps],
                 "window_context": ctx}
-        side = {"name": mp3.name, "ts": time.time(), "prompt": f"composer {proj['name']} windows",
+        side = {"name": take.name, "ts": time.time(), "prompt": f"composer {proj['name']} windows",
                 "spec_b64": spec, "gen": {"seed": seed, "seconds": b["length"], "dit": model["dit"],
                                           "composite": comp, "segments": {"strength": box["strength"],
                                                                           "cond": box["cond"]}}}
-        (out_dir / f"{mp3.name}.json").write_text(json.dumps(side))
-        takes.append(out_dir / f"{mp3.name}.json")
-        log(f"stitched seed {seed} → outputs/{outdir}/{mp3.name}")
+        (out_dir / f"{take.name}.json").write_text(json.dumps(side))
+        takes.append(out_dir / f"{take.name}.json")
+        log(f"stitched seed {seed} → outputs/{outdir}/{take.name}")
     return takes
 
 

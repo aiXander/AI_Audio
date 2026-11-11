@@ -20,7 +20,9 @@
 // A lane may also carry `markers: [{id, t, label, tip, color, cut, shape, free}]` (keypoints: diamonds on
 // the lane, drag to move → onMarker(marker, t), click → onMarkerClick(marker, event)); `shape: "fade"`
 // draws a ⟷ pill along the lane's top instead (a handle, e.g. a crossfade's length: the page reads
-// the dragged distance), `free: true` drags without snapping or the guide line. `onClick(t, event)`
+// the dragged distance), `shape: "grip"` a ⠿ pill along the lane's bottom (a handle that moves a whole
+// span, e.g. a conditioning block: again the page reads the distance),
+// `free: true` drags without snapping or the guide line. `onClick(t, event)`
 // While a marker is dragged a guide line runs through every lane (and its time shows in the ruler),
 // so it lines up with what the other lanes show. `snapTo: [t, …] | () => [t, …]` on that lane are
 // edges it snaps to first (clip starts / ends), from SNAP_PX away, ahead of the beat grid; the
@@ -238,9 +240,10 @@ export class Timeline {
       const ms = r.lane.markers || [];
       for (const m of ms) {                                      // a fade pill (top strip) before the diamonds under it
         if (m.shape === "fade" && py <= r.y + 17 && Math.abs(px - this.x(m.t)) <= 13) return { r, it: null, marker: m };
+        if (m.shape === "grip" && py >= r.y + r.h - 17 && Math.abs(px - this.x(m.t)) <= 16) return { r, it: null, marker: m };
       }
       for (const m of ms) {
-        if (m.shape !== "fade" && Math.abs(px - this.x(m.t)) <= 7) return { r, it: null, marker: m };
+        if (m.shape !== "fade" && m.shape !== "grip" && Math.abs(px - this.x(m.t)) <= 7) return { r, it: null, marker: m };
       }
       for (const it of (r.lane.items || []).slice().reverse()) {
         const a = this.x(it.t0), b = this.x(it.t1);
@@ -702,6 +705,14 @@ export class Timeline {
         g.beginPath(); g.moveTo(x - 7, y + h / 2); g.lineTo(x - 3, y + 2.5); g.lineTo(x - 3, y + h - 2.5); g.closePath(); g.fill();
         g.beginPath(); g.moveTo(x + 7, y + h / 2); g.lineTo(x + 3, y + 2.5); g.lineTo(x + 3, y + h - 2.5); g.closePath(); g.fill();
         g.fillRect(x - 3, y + h / 2 - 0.6, 6, 1.2);
+        continue;
+      }
+      if (m.shape === "grip") {                                      // a ⠿ pill along the bottom: move the span
+        const w = 28, h = 12, y = r.y + r.h - h - 3;
+        g.fillStyle = on ? "#fff" : "rgba(12,12,17,0.92)"; g.strokeStyle = m.color || "#c4bbff"; g.lineWidth = 1.2;
+        g.beginPath(); g.roundRect(x - w / 2, y, w, h, 6); g.fill(); g.stroke();
+        g.fillStyle = on ? "#0c0c11" : m.color || "#c4bbff";
+        for (let i = -2; i <= 2; i++) for (const dy of [-2, 2]) { g.beginPath(); g.arc(x + i * 4, y + h / 2 + dy, 1.1, 0, 7); g.fill(); }
         continue;
       }
       g.fillStyle = m.color || "#c4bbff";

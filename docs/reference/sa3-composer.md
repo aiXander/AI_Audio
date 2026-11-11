@@ -106,6 +106,10 @@ default between "sound" and "prompt" mode is for the 0g blind triplets to decide
 - **Tracks and layering.** Pieces sit on tracks; overlaps sum. Order per piece: fix chain (conforms it
   to the project) → mix strip (gain, pan, HP / LP, 3-band EQ; static, no automation) → sum → master gain
   + limiter → `ref.wav`, exactly the project length (the studio's Length follows the reference).
+- **The master limiter does not survive SA3.** SAME-L's decode re-peaks ~1–2 dB above its input, so
+  the studio limits every render again at −1 dBFS before saving (`studio._peak_guard`; raw peak in
+  `gen.peak_guard`). Before 2026-11-07 renders were hard-clipped at 0 dBFS instead. Render settings →
+  File = WAV (`model.format`) saves takes as 16-bit WAV for mastering.
 - **SA3 only sees the mix.** Any generated or soft frame over an overlap regenerates every layer in it;
   per-layer inpaint would need stem separation. The upside is the **glue trick**: a soft region over an
   overlap asks SA3 to re-perform the stacked layers as one.
@@ -230,8 +234,13 @@ fade between two blocks has a ⟷ handle: dragging it moves both keypoints aroun
 (`withFade`), the only control of *how gradual* a change is (the curve stays cosine). Keypoint curves
 are resolved in the page with `key_curves`' rule so drags redraw live; source names are not drawn on the
 lane (they overlapped), only in the 0.7 s hover tooltip (`tipAt`, ui/timeline.js) and the menu. Auto mode never turns itself into keypoints
-behind your back; only an explicit act does: "Edit as keypoints", or **inserting** a source (drag across
-the lane, or right-click a gap between clips → `insertCond`). An insert holds the new anchor at weight 1
+behind your back; only an explicit act does: "Edit as keypoints", **inserting** a source (drag across
+the lane, or right-click a gap between clips → `insertCond`), or dragging one of the lane's handles. In
+Auto / One-anchor mode the lane still shows ◆ ⟷ and ⠿ handles, on the build's curves as keypoints
+(`editKeys` = `autoKeys`, once per build), so a clip override (right-click → Replace) can be trimmed or
+moved like any block; the drop writes those keypoints and switches to Keypoints mode in one undo step.
+A block's ⠿ grip (kit marker `shape: "grip"`) moves it with its fades (`movedBlock`: the keypoint just
+outside each end moves too, clamped by the next one out; start snaps to clip edges / beats). An insert holds the new anchor at weight 1
 over the span and puts the old one back a fade (one bar, ≤ ¼ span) outside each edge, dropping keypoints
 inside that window, so nothing outside it changes. The pickers resolve after an `await`
 and write by index (`keys[i]`, `pieces[pi]`): safe only because the modal's backdrop blocks every
@@ -260,6 +269,17 @@ carries the neighbours' style into it, which is the point (the audio context ste
 In the acceptance test, m1, m3, a hard cut and no interpolation gave near-identical gaps within a seed
 (the noise seed dominates), which is why the cheaper M1 is the default.
 
+**How hard a prompt steers is set by CFG, not by the curves.** In a full-strength inpaint span with the prompt
+over the span and muted conditioning around it, the audio context wins at CFG 1: the span carries on the
+neighbouring texture for several seconds and the prompt only tints it. CFG 2 steers noticeably; CFG 4 is
+very strong (a solo-piano prompt into a glitchy track gave clean, separate piano notes, and the
+carried-over texture died within ~3 s). **Default to CFG 1.5–2.0 for steering renders and experiments**;
+4 when the prompt must override the context. The span's edges still bend toward the kept audio at any CFG
+(a span ending before a quiet kept section fades out). The same holds for a sampled anarchy bag as the
+anchor (CFG 2 steers it as clearly as a text prompt). The noise seed sets the span's block layout; the
+anchor sets what fills the blocks, so compare conditionings at a fixed seed. Renders + A/B pages:
+`outputs/composer-exp/prompt-steer/` and `latent-steer/` (shared `prompt-steer/run.py`).
+
 ### 4.6 Smaller levers (experiments, not features)
 
 0e tests regenerate-to-fit (re-render a text piece's recipe at the project BPM, same seed) and latent
@@ -278,6 +298,13 @@ time-stretch (`bench/latent_stretch.py`) against rubberband; 0h tests splicing T
   completes with no output: `compose._run_jobs` logs it "removed", not a failure. The page shows a
   batch's lanes before its save + build finishes (an optimistic placeholder, replaced by the server's).
 - **Agent test renders go to `teststudio.py`** on another port, never :7860 (Xander's history).
+- **The monitor never waits for the build.** Every edit autosaves + rebuilds the whole reference
+  (~2 s warm on a 7-min project: limiter, LUFS, the ref.wav write), so the page plays each active
+  clip's audio from the newest build that held it (`composer.js` `mixPieces`): mute / solo / delete
+  are heard at once; only a clip no build has seen yet waits. Autosaves coalesce (`server.save`
+  `coalesce`): a save still queued behind a running build is skipped when a newer one arrives.
+  Big buffers through ffmpeg go via `mixdsp.pipe`, never `subprocess.run(input=…)`: on macOS its
+  `communicate()` feeds stdin 512 bytes at a time (~3× slower on a full mix).
 - **Bare filenames only resolve in the active folder** (`library._audio_path`); use render ids.
 - **The reference must be exactly the project length**: the studio's Length follows the reference
   (`segments.locked_length`), and one input mode at a time (`segments.BOTH`); the composer uses the
