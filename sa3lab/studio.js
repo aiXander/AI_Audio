@@ -1381,6 +1381,7 @@
             }
             prog.label = d.phase === "sampling" ? `step ${Math.min(d.step + 1, d.steps)}/${d.steps}`
               : d.phase === "decode" ? "decoding" : "encoding prompt";
+            if (d.host && d.host !== "mac") prog.label += " · Beast";   // rendering on the RTX 3090 box (remote.py)
           } else if (prog.rev < 0) {
             progEl.classList.add("wait");
             progEl.querySelector("i").style.width = "0%";

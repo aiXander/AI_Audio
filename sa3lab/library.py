@@ -571,19 +571,28 @@ def _speed_rows() -> list[dict]:
             steps, cfg = 8, d.get("cfg", 1.0)      # pre-library renders: steps unknown, studio default
         passes = 2 if cfg != 1.0 else 1
         rows.append({"ts": d.get("ts", 0), "dit": g.get("dit") or d.get("dit") or "",
+                     "host": (g.get("backend") or {}).get("host") or "mac",
                      "T": T, "t5": t5, "smp_k": smp / max(1, steps * T * passes),
                      "dec_k": dec / max(1, T)})
     rows.sort(key=lambda r: -r["ts"])
-    _speed.update(mtime=m, rows=rows[:60])
+    per: dict = {}                                 # newest 60 per host (a box session can't push out the Mac's)
+    _speed.update(mtime=m, rows=[r for r in rows if per.setdefault(r["host"], []).append(r) or len(per[r["host"]]) <= 60])
     return _speed["rows"]
 
 
-def estimate_ms(dit: str, seconds: float, steps: int, cfg: float) -> dict:
-    """Predicted {t5, sample, decode, total} ms for a render; defaults if no history."""
+# per-unit costs when a host has no history yet: (sample ms per step·frame·pass, decode ms per frame, t5 ms)
+DEFAULT_SPEED = {"mac": (1.8, 10.3, 250.0),          # M2 MacBook Pro, medium + same-l, measured 2026-11-05
+                 "rednax-beast": (0.2, 1.0, 60.0)}   # RTX 3090 (remote.py); replaced by real rows after a few renders
+
+
+def estimate_ms(dit: str, seconds: float, steps: int, cfg: float, host: str = "mac") -> dict:
+    """Predicted {t5, sample, decode, total} ms for a render; defaults if no history. Only rows
+    rendered on `host` count (gen.backend.host, absent = "mac"): the box is ~10x faster, so mixing
+    them would make both progress bars useless."""
     sr = getattr(_up, "SAMPLE_RATE", 44100)
     spl = getattr(_up, "SAMPLES_PER_LATENT", 4096)
     T = max(1, -(-int(seconds * sr) // spl))
-    rows = _speed_rows()
+    rows = [r for r in _speed_rows() if r.get("host", "mac") == host]
     same = [r for r in rows if r["dit"] == dit] or rows
     near = [r for r in same if 0.6 <= r["T"] / T <= 1.6] or same     # cost per frame drifts with length
     pick = near[:12]
@@ -591,8 +600,8 @@ def estimate_ms(dit: str, seconds: float, steps: int, cfg: float) -> dict:
         smp_k = statistics.median(r["smp_k"] for r in pick)
         dec_k = statistics.median(r["dec_k"] for r in pick)
         t5 = statistics.median(r["t5"] for r in pick)
-    else:   # M2 MacBook Pro, medium + same-l, measured 2026-11-05
-        smp_k, dec_k, t5 = 1.8, 10.3, 250.0
+    else:
+        smp_k, dec_k, t5 = DEFAULT_SPEED.get(host, DEFAULT_SPEED["mac"])
     smp = smp_k * steps * T * (2 if cfg != 1.0 else 1)
     dec = dec_k * T
     return {"t5": t5, "sample": smp, "decode": dec, "total": t5 + smp + dec, "n": len(pick)}
@@ -601,13 +610,13 @@ def estimate_ms(dit: str, seconds: float, steps: int, cfg: float) -> dict:
 _prog: dict = {"active": False}
 
 
-def progress_start(bound: inspect.BoundArguments) -> None:
+def progress_start(bound: inspect.BoundArguments, host: str = "mac") -> None:
     a = bound.arguments
-    est = estimate_ms(a["dit_name"], float(a["seconds"]), int(a["steps"]), float(a["cfg"]))
+    est = estimate_ms(a["dit_name"], float(a["seconds"]), int(a["steps"]), float(a["cfg"]), host)
     now = time.time()
     _prog.clear()
     _prog.update(active=True, t0=now, phase="text", step=0, steps=int(a["steps"]), est=est,
-                 end=now + est["total"] / 1000, rev=0)
+                 end=now + est["total"] / 1000, rev=0, host=host)
 
 
 def _replan(end: float) -> None:
@@ -666,7 +675,7 @@ def progress() -> dict:
     return {"active": True, "run": _prog["t0"], "waiting": jobs_waiting(), "elapsed_s": round(now - _prog["t0"], 2),
             "left_s": round(max(0.0, _prog["end"] - now), 2), "rev": _prog["rev"],
             "phase": _prog["phase"], "step": _prog.get("step", 0), "steps": _prog.get("steps"),
-            "history_n": _prog["est"]["n"]}
+            "history_n": _prog["est"]["n"], "host": _prog.get("host", "mac")}
 
 
 # ── library browser: every render as one filterable row (the studio's Library modal) ──

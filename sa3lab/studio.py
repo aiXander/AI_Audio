@@ -112,12 +112,11 @@ import anarchy_ui  # noqa: E402  (the Promptless panel: anarchy_ui.js/.css + spe
 import addons  # noqa: E402  (add-on browser assets merged into CSS/JS)
 import djview  # noqa: E402  (full-screen CDJ-style view of a clip, /sa3/djspec)
 import outdir  # noqa: E402  (switchable output folder: view + render destination)
-import noise  # noqa: E402  (length-stable seeds: noise cropped from one fixed canvas)
 import extend  # noqa: E402  (Extend button: re-render a clip longer, the clip kept as inpaint context)
 import arranger_link  # noqa: E402  (Arranger button + "Send to SA3" from sa3lab/arranger/)
 import segments  # noqa: E402  (spans drawn on the inpaint / a2a input's dadaspec → mask / σ map)
-import condmix  # noqa: E402  (conditioning anchors blended per latent frame: the box's "cond")
-import condsrc  # noqa: E402  (what a render was conditioned on: a multi-anchor render's bank)
+import engine  # noqa: E402  (the render path: noise, segments, condmix, condsrc, anarchy, stop checks)
+import remote  # noqa: E402  (the RTX 3090 box: render-on chip, job dispatch, outputs/ archive)
 import loras  # noqa: E402  (the loras/ library + the kit LoRA stack ↔ upstream's 3 slots)
 from composer import server as composer_server  # noqa: E402  (the Composer page + its /sa3/composer/* routes)
 
@@ -264,8 +263,7 @@ def _add_stop_button():
 # (Infinite Radio) inherits the epoch of the click that spawned it. Stop marks
 # every epoch up to now as stopped, so it kills the running render AND the
 # follow-up pregen, while a Generate clicked right after Stop runs normally.
-class Stopped(Exception):
-    pass
+Stopped = engine.Stopped
 
 
 _stop = {"epoch": 0, "stopped_upto": 0, "run": None}
@@ -310,10 +308,26 @@ def _peak_guard(res):
         return res, None
 
 
+class _StudioHooks(engine.Hooks):
+    """engine.py's in-render checks → the studio's Stop flag and live progress (library.py)."""
+
+    def check_stop(self):
+        _check_stop()
+
+    def progress_step(self, i):
+        library.progress_step(i)
+
+    def progress_phase(self, name):
+        library.progress_phase(name)
+
+
 def _install_stop_hooks():
-    """Stop checks, plus (library.py) live progress and the regen-metadata capture:
-    run_generation's exact arguments + measured timings land in `_tl.gen` on the
-    handler thread, and _wire_handlers attaches them to the new entry."""
+    """The one cut point between the studio and the render: run_generation's exact arguments
+    + measured timings land in `_tl.gen` on the handler thread (_wire_handlers attaches them to
+    the new entry), and the job renders either here (the MLX owner thread) or on the RTX 3090
+    box (remote.py, when the Render-on chip says Beast). Everything after it (peak guard, gen
+    record, file name, mp3, sidecar, history) is the same for both. The checks *inside* a render
+    (sampler steps, decoder chunks, encoder / DiT loads) are engine.py's."""
     orig_call = up.mlx_call
     gen_sig = inspect.signature(up.run_generation)
 
@@ -338,61 +352,22 @@ def _install_stop_hooks():
             finally:
                 _stop["run"] = None
                 library.progress_end()
-        res = orig_call(run, *a, **kw)
+        res = None
+        if remote.target() == "beast":   # None = the box failed (network, crash): render here instead
+            res = remote.render(bound, seg, lambda: epoch is not None and _stop["stopped_upto"] >= epoch)
+        if res is None:
+            remote.mark_local()
+            res = orig_call(run, *a, **kw)
         res, guard = _peak_guard(res)
         try:
             _tl.gen = library.gen_record(bound, res[1] if isinstance(res, tuple) else None)
             if guard:
                 _tl.gen["peak_guard"] = guard
+            _tl.gen["backend"] = remote.backend_record()
         except Exception as e:      # never break a generation over bookkeeping
             print(f"[sa3lab] gen record failed: {e}", flush=True)
         return res
     up.mlx_call = mlx_call
-
-    orig_sample = up.sample_flow_pingpong
-
-    def sample(*a, before_step=None, **kw):
-        def bs(i):
-            _check_stop()
-            library.progress_step(i)
-            if before_step is not None:
-                before_step(i)
-        return orig_sample(*a, before_step=bs, **kw)
-    up.sample_flow_pingpong = sample
-
-    # The decode is 18-66 s of a long render, built by decode_chunked as one lazy MLX graph and
-    # evaluated in one go, so a Skip/Stop pressed during it used to wait the whole decode out.
-    # Each decoder call (one chunk, ~1-2 s) now evaluates on its own and checks the flag first:
-    # same ops, same output, just a sync point per chunk.
-    class _StoppableDecoder:
-        def __init__(self, model):
-            self._m = model
-
-        def __call__(self, *a, **kw):
-            _check_stop()
-            out = self._m(*a, **kw)
-            up.mx.eval(out)
-            return out
-
-        def __getattr__(self, k):
-            return getattr(self._m, k)
-
-    orig_dec = up.get_decoder
-
-    def get_decoder(*a, **kw):
-        _check_stop()
-        library.progress_phase("decode")
-        model, *rest = orig_dec(*a, **kw)
-        return (_StoppableDecoder(model), *rest)
-    up.get_decoder = get_decoder
-
-    # the other long stretches without a sampler step: SAME-L encode of an a2a / inpaint input
-    # (up to ~10 s) and a DiT load for a new length (~3 s) each check once before starting
-    for name in ("get_encoder", "get_dit"):
-        def checked(*a, _orig=getattr(up, name), **kw):
-            _check_stop()
-            return _orig(*a, **kw)
-        setattr(up, name, checked)
 
     # every render gets a uuid: upstream names files prompt[.cfg…].{seed}, so re-rendering
     # the same prompt + seed (e.g. with a different LoRA) silently overwrote the earlier clip
@@ -596,7 +571,7 @@ CSS += ("#sa3-promote{display:none !important}"
         "#sa3-out{gap:6px !important}"
         "#sa3-out .html-container{padding:0 !important; margin:0 !important}")
 JS = (Path(__file__).with_name("studio.js")).read_text()
-CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl", "lora_link", "djview")
+CSS, JS = addons.assets(CSS, JS, "anarchy_ui", "outdir", "extend", "uiprefs", "arranger_link", "segments", "composer_link", "highlights_link", "strength_tl", "lora_link", "djview", "remote")
 
 
 def _add_restore_on_load(demo, render_player):
@@ -989,19 +964,16 @@ def main():
 
     up.render_spectrogram_png = hispec.render_spectrogram_png  # sa3_gradio imported it by name
     library.init(up)
-    noise.install(library)
+    engine.install(up, library, persist, _StudioHooks())   # the render path, same on the box's worker
     extend.install(library)
     arranger_link.install(library)
-    segments.install(up, library)       # sampler hook, gen.segments, restore passthrough, /sa3/inspec
-    condmix.install(up)                 # DiT hook: the box's "cond" anchors (composer crossfades, morphs)
-    condsrc.install(persist)            # a multi-anchor render's tensors → <audio>.conds.npz on save
     outdir.init(up, library)            # restores the saved active output folder
     library.install_routes()
     djview.install_routes()
     loras.install_routes()
     renderq.install_routes()
-    anarchy_ui.install(up, persist)
     anarchy_ui.install_routes()
+    remote.install(up, library, _prefs, _set_pref)   # /sa3/remote (the chip), health poll, archive thread
     outdir.install_routes()
     arranger_link.install_routes()
     composer_server.install_routes()    # /sa3/page/composer, the UI kit at /sa3/ui/*

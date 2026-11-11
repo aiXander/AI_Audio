@@ -1,0 +1,22 @@
+# SA3 render worker on the RTX 3090 box (sa3lab/beast/worker.py). Installed by `scripts/beast.sh install`
+# into ~/.config/systemd/user/ (lingering is on, so it runs without a login). Code lives in the deploy copy
+# that the Mac's `make start` rsyncs (scripts/beast.sh deploy); weights in the repo clone's models/hf-cache.
+[Unit]
+Description=SA3 render worker (MLX on CUDA) for the Mac's studio
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/SSD2TB/sa3-worker
+Environment=PYTHONUNBUFFERED=1
+Environment=HF_HUB_CACHE=%h/SSD2TB/Github_repos/AI_Audio/models/hf-cache
+Environment=SA_REPO=%h/SSD2TB/sa3-worker/semantic-anarchy
+Environment=SA3_ARCHIVE=%h/12TBHDD/AI_Audio
+Environment=SA3_BLOBS=%h/SSD2TB/sa3-worker/AI_Audio/blobs
+# binds the Tailscale address only; until tailscaled is up the bind fails and systemd retries
+ExecStart=%h/SSD2TB/sa3-worker/.venv/bin/python %h/SSD2TB/sa3-worker/AI_Audio/sa3lab/beast/worker.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,148 @@
+{
+  "_comment": "Djrum 'Under Tangled Silence' DoRA v1 on SA3-medium (trained 2026-11-05 as djrum-uts-v1-20261105174615). Template for new runs: copy, change name/dataset_id/demo prompts. Launch: python3 sa3lab/train/uf.py launch <file>. Why each value + how to babysit: underfit/docs/reference/sa3-lora-training.md.",
+  "name": "djrum-uts-v1",
+  "gpu": 0,
+  "engine": "torch",
+  "base_model": "sa3-medium",
+  "_base_precision": "omitted on purpose: frozen base stays fp32 as shipped (the form defaults to fp16); ~5 GB more VRAM, more exact DoRA norms",
+  "dataset_id": "djrum-uts-sa3-medium-20261105",
+  "lora_type": "dora-rows",
+  "rank": 16,
+  "lr": "1e-4",
+  "lora_exclude": "to_timestep_embed, to_cond_embed, to_global_embed, to_local_embed, global_cond_embedder, seconds_total, project_in, project_out, preprocess_conv, postprocess_conv",
+  "max_steps": 14000,
+  "batch_size": 1,
+  "checkpoint_every": 2000,
+  "demo_every": 2000,
+  "random_crop": true,
+  "latent_crop_length": 512,
+  "prompt_config": {
+    "trigger": "",
+    "trigger_pct": 0,
+    "use_tags": false,
+    "tag_keys": [],
+    "hide_tag_names": false,
+    "hide_commas": false,
+    "split_commas": false,
+    "shuffle": true,
+    "use_paths": false,
+    "path_opts": {},
+    "use_fixed": true,
+    "fixed_text": "TrackType: Music, VocalType: Instrumental",
+    "balance": {
+      "tags": 0,
+      "paths": 0,
+      "fixed": 100
+    }
+  },
+  "demo_cond": [
+    {
+      "_what": "training prompt (no trigger)",
+      "prompt": "TrackType: Music, VocalType: Instrumental",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 42,
+      "duration": 120
+    },
+    {
+      "_what": "unconditional (empty prompt)",
+      "prompt": "",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 44,
+      "duration": 120,
+      "fixed_prompt": true
+    },
+    {
+      "_what": "djrum-adjacent 1, no trigger: breakbeat/jungle side",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Breakbeat, Jungle, Electronic, Instruments: Breakbeat Drums, Sub Bass, Piano, Strings, Moods: Melancholic, Atmospheric, BPM: 170",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 101,
+      "duration": 120
+    },
+    {
+      "_what": "djrum-adjacent 2, no trigger: ambient/acoustic side",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Ambient, Electronic, Modern Classical, Instruments: Piano, Harp, Cello, Synth Pad, Moods: Contemplative, Dreamy",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 102,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: jazz piano trio",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Jazz, Instruments: Piano, Upright Bass, Drums, Moods: Relaxed, Warm, BPM: 120",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 201,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: cinematic orchestral",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Cinematic, Orchestral, Instruments: Strings, French Horn, Timpani, Choir, Moods: Epic, BPM: 90",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 202,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: techno",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Techno, Instruments: Kick Drum, Synth Bass, Hi-Hats, Moods: Driving, Hypnotic, BPM: 130",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 203,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: acoustic folk",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Folk, Acoustic, Instruments: Acoustic Guitar, Fiddle, Moods: Warm, Uplifting, BPM: 100",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 204,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: boom-bap hip hop beat",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Hip Hop, Instruments: Drums, Bass, Vinyl Samples, Moods: Laid-back, BPM: 90",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 205,
+      "duration": 120
+    },
+    {
+      "_what": "diversity: heavy metal",
+      "prompt": "TrackType: Music, VocalType: Instrumental, Genre: Metal, Instruments: Distorted Electric Guitar, Drums, Bass, Moods: Aggressive, BPM: 160",
+      "arc": true,
+      "cfg": 1,
+      "steps": 8,
+      "seed": 206,
+      "duration": 120
+    },
+    {
+      "_what": "RF base cfg7, training prompt (early 'got it' signal)",
+      "prompt": "TrackType: Music, VocalType: Instrumental",
+      "cfg": 7,
+      "steps": 50,
+      "seed": 42,
+      "duration": 120
+    },
+    {
+      "_what": "RF base cfg1, training prompt (overtakes cfg7 late)",
+      "prompt": "TrackType: Music, VocalType: Instrumental",
+      "cfg": 1,
+      "steps": 50,
+      "seed": 42,
+      "duration": 120
+    }
+  ],
+  "_trigger": "removed on purpose (Xander, 2026-11-05): no trigger word; every clip trains on the fixed SA3 prefix alone"
+}

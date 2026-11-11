@@ -1,0 +1,22 @@
+/* Render-on chip (remote.js): same shape as the Queue button, a status dot in front */
+#sa3-rchip { flex: none; display: inline-flex; align-items: center; gap: 7px; width: auto !important; min-width: 0 !important;
+  height: 30px; padding: 0 12px 0 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.035);
+  color: #8b8b9c; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+#sa3-rchip i { width: 7px; height: 7px; border-radius: 99px; background: #5b5b6b; }
+#sa3-rchip.beast { color: #c9f5d8; border-color: rgba(80,220,140,0.35); background: rgba(80,220,140,0.08); }
+#sa3-rchip.beast i { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,0.8); }
+#sa3-rchip.pinned i { background: #9b8cff; }
+#sa3-rchip:hover { color: #fff; border-color: rgba(155,140,255,0.5); }
+
+#sa3-rpop { position: fixed; z-index: 1000; display: none; width: 260px; padding: 6px; border-radius: 12px;
+  background: #15151c; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+#sa3-rpop.open { display: block; }
+#sa3-rpop .rc-h { padding: 6px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #71717f; }
+#sa3-rpop .rc-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 7px 8px;
+  border: 0; border-radius: 8px; background: transparent; color: #d4d4de; text-align: left; cursor: pointer; }
+#sa3-rpop .rc-opt b { font-size: 13px; font-weight: 600; }
+#sa3-rpop .rc-opt span { font-size: 12px; color: #8b8b9c; }
+#sa3-rpop .rc-opt:hover { background: rgba(255,255,255,0.05); }
+#sa3-rpop .rc-opt.on { background: rgba(155,140,255,0.14); }
+#sa3-rpop .rc-opt.on b::after { content: " ✓"; color: #9b8cff; }
+#sa3-rpop .rc-foot { margin-top: 4px; padding: 7px 8px 4px; border-top: 1px solid rgba(255,255,255,0.06); font-size: 12px; color: #8b8b9c; line-height: 1.4; }

@@ -2,15 +2,17 @@ PORT ?= 7860
 URL  := http://127.0.0.1:$(PORT)/sa3/app
 UP   := curl -s -o /dev/null http://127.0.0.1:$(PORT)/
 
-.PHONY: start stop arranger push pull help
+.PHONY: start stop arranger push pull help archive archive-check beast beast-logs
 .DEFAULT_GOAL := help
 
 help: ## List targets
-	@grep -E '^[a-z]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-6s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-13s %s\n", $$1, $$2}'
 
 # A running instance (background or another terminal) is stopped and replaced. Once the
 # server answers, scripts/open-ui.sh focuses the open studio tab in Chrome (it reloads
-# itself onto the new server) or opens a new one if there is none.
+# itself onto the new server) or opens a new one if there is none. In the background, the
+# render-path code is deployed to the RTX 3090 box (scripts/beast.sh deploy: restarts its worker
+# only when the code changed); a box that's off just prints one line and the studio renders here.
 start: ## (Re)start SA3 Studio in the foreground, picking up code edits; Ctrl-C stops it
 	@if $(UP) || pgrep -f "sa3lab/(devwatch|studio)\.py" >/dev/null; then \
 	  echo "SA3 Studio already running on :$(PORT) — restarting it"; \
@@ -19,6 +21,7 @@ start: ## (Re)start SA3 Studio in the foreground, picking up code edits; Ctrl-C 
 	  if $(UP); then echo "port $(PORT) is still in use by something else"; exit 1; fi; \
 	fi; \
 	scripts/open-ui.sh $(PORT) "$(URL)" & \
+	scripts/beast.sh deploy --quiet & \
 	exec sa3lab/studio --port $(PORT)
 
 stop: ## Stop a SA3 Studio running in the background
@@ -36,3 +39,15 @@ push: ## Commit + push every submodule, then AI_Audio (make push m="message")
 
 pull: ## Pull AI_Audio and every submodule (on main), e.g. after the other machine pushed
 	@scripts/sync.sh pull
+
+archive: ## Mirror outputs/ to the RTX 3090 box's 12 TB archive now (never deletes there)
+	@scripts/archive.sh push
+
+archive-check: ## List Mac files not yet safely on the box (empty = safe to delete locally)
+	@scripts/archive.sh check
+
+beast: ## Status of the box's render worker (/health)
+	@scripts/beast.sh status
+
+beast-logs: ## Last lines of the box's render worker log
+	@scripts/beast.sh logs

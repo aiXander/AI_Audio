@@ -103,7 +103,7 @@ function qRow(job, i) {
        <button class="dn" title="Move down"${i === qData.waiting.length - 1 ? " disabled" : ""}>▼</button>
        <button class="del" title="Remove from the queue">${ICON_TRASH}</button>`;
   d.innerHTML = `
-    <div class="hd">${run ? `<span class="now">${job.stopping ? "stopping" : "rendering"}</span>` : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
+    <div class="hd">${run ? `<span class="now">${job.stopping ? "stopping" : "rendering"}${job.on ? " on " + esc(job.on) : ""}</span>` : `<span class="grip" title="Drag to reorder">⋮⋮</span><span class="ix">${i + 1}</span>`}</div>
     <div class="bd"><div class="pr" title="${esc(p.prompt || "")}">${pr}</div><div class="ch">${qChips(p)}</div></div>
     <div class="ac">${acts}</div>`;
   if (!run) d.draggable = true;
