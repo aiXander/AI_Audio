@@ -11,6 +11,7 @@
 ## Shipped
 
 Phase 0 speed and parity numbers are logged in the research Claude Doc (Log, 2026-11-11).
+
 All four phases: `engine.py` (shared render path + `CAPTURES`), `beast/worker.py` (systemd unit `sa3-worker`, live on the box), `remote.py` + the Render-on chip, `gen.backend` + per-host speed models, the raw archive + `outputs/` mirror (`scripts/archive.sh`, `make archive` / `archive-check`), deploy on `make start` (`scripts/beast.sh`). Box-side acceptance (`outputs/beast-tests/e2e/`, see its context.md): t2a, a2a, inpaint curve, LoRA step window come back bit-identical to a local render; anarchy `@file` (same `.cond.npz` and `anarchy` block), condmix + bank anchors (same `.conds.npz`), cfg 3 + negative, Stop, render errors, busy / mismatch / unreachable / worker-restart fallbacks, raw copies, mirror never deletes and picks up label edits.
 
 ## Later (not this spec)
