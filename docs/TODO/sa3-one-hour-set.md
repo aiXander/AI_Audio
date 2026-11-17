@@ -25,6 +25,8 @@ hour. The event concept itself (venue, audience participation) lives in Xander's
    Extend or an inpaint span under its own conditioning), steady tempo through the whole track
    (unmeasured: run `tempo.py` per 30 s window over a finished composite and see whether SA3 drifts),
    and one loudness target for every track (Xander picks it; `mixdsp.py` already measures LUFS).
+   How to reach that target (plain loudness normalisation or a reference-mastering step) is an
+   undecided proposal of its own: [sa3-mastering.md](sa3-mastering.md).
 2. **The set as an object.** `outputs/sets/<name>/set.json`: ordered tracks (a Composer project or a
    finished render), each with measured BPM, key, LUFS and length. A CLI summary first: total length,
    key clashes between neighbours (Camelot distance), BPM jumps past ~6 %. A "Set" tab in the tab host

@@ -2,7 +2,7 @@
 
     stable-audio-3/optimized/mlx/.venv/bin/python sa3lab/dadagrid.py a.mp3 b.mp3 … \
         [--labels "base" "s2" …] [--out grid.png] [--width 1600]
-    → prints the PNG path; open it with the Read tool.
+    → prints one line of measured numbers per row, then the PNG path (last line); open it with Read.
 
 Same pixels as the studio's spectrogram (`hispec.render_spectrogram_png`), folded to mono
 exactly as `uiprefs.js` does (L and R averaged, bass at the bottom). Mono on purpose (Xander's
@@ -16,6 +16,14 @@ mirrored stereo view. How to read one:
   all three hot. So colour compares a moment against the rest of *that* clip, not across clips.
 - vertical striations = onsets / beats (their spacing is the tempo); horizontal lines =
   sustained pitches / harmonics; smooth smears = noise, pads, reverb; black = silence.
+
+The numbers line (`numbers()`, measured by keyfind.py over the whole clip) carries what the
+picture can't: its brightness and colour are normalised per clip and it is mono. Per row:
+length, integrated LUFS, sample peak dBFS, each band's share of the total energy in dB (bass
+< 200 Hz / mid / high > 1.5 kHz; 0 dB = all of it), stereo width (side / mid RMS: 0 = mono,
+~0.3 normal, 1 = very wide), key and BPM with their confidence. "no clear key" and "no steady
+beat" are real answers (drones, textures), not failures. BPM is measured blind, so it can
+be half or double the prompted tempo (the row label shows the sidecar's prompt-aware BPM).
 
 Each row is labelled with the given label, else the sidecar's prompt (anarchy prefix
 stripped), seed, score and measured BPM. Accepts audio files or their `.json` sidecars.
@@ -78,6 +86,20 @@ def _label(path: Path) -> str:
     return "  ·  ".join(bits)
 
 
+def numbers(path: Path) -> str:
+    """One line of measured numbers for a clip (see the module docstring for how to read it)."""
+    import keyfind
+    y = keyfind.decode(path)
+    a = keyfind.analyze(y)
+    peak = 20 * np.log10(max(float(np.abs(y).max()), 1e-5)) if y.size else -100.0
+    lufs = "silent" if a["lufs"] is None else f"{a['lufs']:.1f} LUFS"
+    key = f"{a['key']} (conf {a['key_conf']:.2f})" if a.get("key") else "no clear key"
+    beat = (f"{a['bpm']:.1f} BPM (conf {a['bpm_conf']:.2f})"
+            if a["bpm"] and a["bpm_conf"] >= keyfind.BEAT_CONF else "no steady beat")
+    return (f"{y.shape[1] / SR:.1f} s | {lufs} | peak {peak:.1f} dBFS | bass/mid/high "
+            + "/".join(f"{b:.1f}" for b in a["bands"]) + f" dB | width {a['width']:.2f} | {key} | {beat}")
+
+
 def _font(size: int = 15):
     try:
         return ImageFont.load_default(size=size)
@@ -119,6 +141,8 @@ def main() -> None:
         hashlib.md5("|".join(map(str, paths)).encode()).hexdigest()[:10] + ".png")
     out.parent.mkdir(parents=True, exist_ok=True)
     grid(paths, args.labels, args.width).save(out)
+    for i, p in enumerate(paths):
+        print(f"{i + 1}. {numbers(p)}")
     print(out)
 
 

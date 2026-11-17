@@ -121,6 +121,7 @@ import loras  # noqa: E402  (the loras/ library + the kit LoRA stack ↔ upstrea
 from composer import server as composer_server  # noqa: E402  (the Composer page + its /sa3/composer/* routes)
 
 HISTORY_ON_LOAD = 10   # renders restored on page load (current + previous)
+HISTORY_MAX = 30       # history rows kept in a session (_cap_history); older ones live in the Library
 
 # ── relabels: upstream label → (new label, info line or None) ──────────────
 RELABEL = {
@@ -382,6 +383,48 @@ def _install_stop_hooks():
     up.verbose_basename = verbose_basename
 
 
+class _JobSlider(gr.Slider):
+    """A render input's slider whose value is not range-checked on the way in.
+
+    gradio checks a queued job's slider values when the job *starts*, against the
+    limits of that moment, and upstream moves limits per session: inpaint From/To
+    follow Length, the LoRA Min/Max step sliders follow Steps, Length follows the model.
+    So queue a 150 s job, set Length to 90 for the next one, and the first job died
+    with "Value 150 is greater than maximum value 90" (2026-11-17). An API call from
+    the Composer hit the same check against the build-time limits (inpaint To ≤ 120 s
+    on Medium's 380 s, LoRA step ≤ 8 at 12 steps). The values were in range when
+    clicked, and generate clamps them itself (Length to the model, the inpaint span to
+    Length; a LoRA step past Steps means "to the end"), so the check only breaks jobs.
+    `is_template` keeps gradio's block name "slider", so the browser renders it as before."""
+    is_template = True
+
+    def preprocess(self, payload):
+        return gr.components.Number.round_to_precision(payload, self.precision)
+
+
+def _free_mlx_cache() -> None:
+    """Hand MLX's freed buffers back to the OS once the queue drains. MLX keeps every buffer a
+    render freed in its own cache (a 120 s Medium render peaks ~18 GB), so without this the idle
+    studio sat on its last render's peak of this Mac's 24 GB. Weights stay loaded; the next render
+    re-allocates its scratch buffers, which costs well under a second. The box's worker does the same."""
+    try:
+        up.mlx_call(up._free_to_pool)
+    except Exception as e:  # noqa: BLE001  (a failed flush must never fail the render)
+        print(f"[sa3] mlx cache flush skipped: {e}", flush=True)
+
+
+def _cap_history(orig):
+    """The history column re-sends every row's inline spectrogram (~350 KB base64 each) on every
+    render, and upstream's list only grows: after 100 renders in one tab each new render shipped
+    ~35 MB of HTML and the session held as much in RAM. Keep the newest HISTORY_MAX rows (trimmed
+    in place, so the session's list stays bounded too); everything older is in the Library."""
+    @functools.wraps(orig)
+    def render_history(hist, *a, **kw):
+        del hist[HISTORY_MAX:]
+        return orig(hist, *a, **kw)
+    return render_history
+
+
 def _wire_handlers(demo):
     """Wrap generate/promote/pregen: tag them with stop epochs, attach the captured
     regen metadata to the entry each one produced, and persist presented entries.
@@ -392,6 +435,9 @@ def _wire_handlers(demo):
             continue
         gen_fns.append(bf)
         orig = bf.fn
+        for c in bf.inputs:         # per-session copies keep the class, so this holds after updates
+            if type(c) is gr.Slider:
+                c.__class__ = _JobSlider
 
         if bf.name == "generate":   # every click queues a job (gradio's default drops clicks while one runs)
             bf.trigger_mode = "multiple"
@@ -410,6 +456,8 @@ def _wire_handlers(demo):
             finally:
                 if _gen and renderq.running and renderq.running["id"] == _tl.epoch:
                     renderq.running = None
+                if not renderq.n_waiting(demo):
+                    _free_mlx_cache()
             state = out[-1] if isinstance(out, tuple) else None
             entry = state.get(slot) if isinstance(state, dict) else None
             if entry and entry.get("key") != before:
@@ -634,12 +682,6 @@ def _add_restore_settings(demo):
     (dit_dd, decoder_dd, prompt, neg, seconds, steps, seed, cfg, apg, sigma_g, init_noise,
      a2a, inpaint, inp_s, inp_e, _opts, _fmt) = gen_bf.inputs[:17]
     lora_dds = gen_bf.inputs[17:32][1::5]
-    # upstream builds the slots' Min / Max step sliders with maximum=default_steps (8) and only
-    # raises it per browser session on a Steps change; gradio validates API calls against that
-    # build-time maximum, so a Composer take at 12 steps (its own gradio_client session, LoRA
-    # max step 12) failed "Value 12 is greater than maximum value 8". Bound them by Steps' own max.
-    for c in [x for i in range(3) for x in gen_bf.inputs[17 + 5 * i + 3: 17 + 5 * i + 5]]:
-        c.maximum = steps.maximum
     orig_dit = dit_bf.fn
     mem_idx = dit_bf.outputs.index(dit_bf.inputs[4])        # lora_mem's slot in the outputs
     with demo:
@@ -979,6 +1021,7 @@ def main():
     composer_server.install_routes()    # /sa3/page/composer, the UI kit at /sa3/ui/*
     _install_stop_hooks()
     up.render_player = _row_player(up.render_player)   # newest clip = first list row
+    up.render_history = _cap_history(up.render_history)
     orig_render_player = up.render_player   # new entries are persisted in _wire_handlers
     theme = build_theme()
     out_real = str(up.OUTPUT_DIR.resolve())

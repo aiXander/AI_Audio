@@ -893,6 +893,7 @@
       put(0);
     }
     setInterval(async () => {
+      if (document.hidden) return;             // a hidden tab catches a restart on its first poll back
       try {
         const r = await fetch("sa3/boot", { cache: "no-store" });
         if (!r.ok) return;
@@ -1447,7 +1448,9 @@
     const tapped = new WeakSet();
     document.addEventListener("play", async (e) => {
       const el = e.target;
-      if (!(el instanceof HTMLMediaElement) || tapped.has(el)) return;
+      if (!(el instanceof HTMLMediaElement)) return;
+      if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});   // tapped clips sound only through ctx
+      if (tapped.has(el)) return;
       if (!(navigator.userActivation && navigator.userActivation.hasBeenActive)) return;
       try {
         if (!ctx) {
@@ -1499,18 +1502,29 @@
       }));
     };
     // GPU budget: every repaint re-blurs all the backdrop-filter panels above
-    // this canvas, so the loop is capped at ~30 fps (playing or idle; a late
-    // frame paints several columns so the crawl keeps its speed), and stops
-    // whenever the window loses focus (rAF alone only stops for a
-    // hidden tab, not a visible-but-unfocused window); focus restarts it.
+    // this canvas (measured 2026-11-17: the idle loop cost Chrome ~half a core).
+    // So: ~30 fps while a clip plays, ~15 fps idle (a late frame paints several
+    // columns so the crawl keeps its speed), frozen after IDLE_FREEZE ms idle
+    // with no input, and stopped whenever the window loses focus (rAF alone only
+    // stops for a hidden tab, not a visible-but-unfocused window) or Background
+    // is Off. Input, play, focus and turning Background on restart it.
+    const IDLE_FPS_MS = 66, IDLE_FREEZE = 20000;
+    let lastInput = performance.now();
     const live = new Set();                     // media elements currently playing
     for (const ev of ["play", "pause", "ended", "emptied"]) document.addEventListener(ev, (e) => {
       if (e.target instanceof HTMLMediaElement) (ev === "play" ? live.add(e.target) : live.delete(e.target));
+      if (ev === "play") wake();
+      else if (ctx && !live.size) setTimeout(() => {   // nothing playing: let the audio thread sleep (play resumes)
+        if (!live.size && ctx.state === "running") ctx.suspend().catch(() => {});
+      }, 1000);
     }, true);
     let running = !still;
-    const wake = () => { if (!running && !still) { running = true; requestAnimationFrame(frame); } };
+    function wake() { if (!running && !still) { running = true; requestAnimationFrame(frame); } }
     addEventListener("focus", wake);
     document.addEventListener("visibilitychange", wake);
+    for (const ev of ["pointermove", "pointerdown", "keydown", "wheel"])
+      addEventListener(ev, () => { lastInput = performance.now(); wake(); }, { passive: true, capture: true });
+    new MutationObserver(wake).observe(document.body, { attributes: true, attributeFilter: ["class"] });   // Background back on
     const paintCol = (vals, gain) => {          // scroll left one pixel, paint the newest column at the right edge
       wg.drawImage(wf, -1, 0);
       for (let y = 0; y < H; y++) {
@@ -1520,15 +1534,16 @@
       wg.putImageData(col, W - 1, 0);
     };
     function frame(now) {
-      if (!still) {
-        if (!document.hasFocus()) { running = false; return; }   // frozen until the window gets focus again
-        requestAnimationFrame(frame);
-      }
-      if (document.body.classList.contains("sa3-nobg")) return;   // Background: Off (uiprefs.js)
       let playing = false;
       if (an) for (const a of live) if (!a.paused && tapped.has(a)) { playing = true; break; }
+      if (!still) {
+        if (!document.hasFocus()                                        // frozen until the window gets focus again
+            || document.body.classList.contains("sa3-nobg")             // Background: Off (uiprefs.js)
+            || (!playing && !live.size && now - lastInput > IDLE_FREEZE)) { running = false; return; }
+        requestAnimationFrame(frame);
+      } else if (document.body.classList.contains("sa3-nobg")) return;
       const dt = now - last;
-      if (!still && dt < 33) return;
+      if (!still && dt < (playing ? 33 : IDLE_FPS_MS)) return;
       last = now;
       const t = now / 1000;
       let lo = 0, mid = 0, hi = 0;

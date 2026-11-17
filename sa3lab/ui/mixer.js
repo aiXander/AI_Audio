@@ -365,6 +365,10 @@ export class Mixer {
     if (this.sess && this.ctx) this.retire(this.sess, this.ctx.currentTime + 0.002);
     this.sess = null;
     this.playing = false;
+    // a running context keeps the audio thread + limiter worklet crunching silence forever (also in a
+    // background tab-host frame); suspend once the declick fade is out. play() resumes it.
+    const tok = this.tok;
+    setTimeout(() => { if (tok === this.tok && !this.playing && this.ctx?.state === "running") this.ctx.suspend(); }, 300);
   }
   pos() {                                    // the timeline time being scheduled now
     const s = this.sess;

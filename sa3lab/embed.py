@@ -58,7 +58,9 @@ _idx: dict = {}
 
 def _sha(p: Path) -> str:
     import sys
-    sys.path.insert(0, str(Path(__file__).parent / "composer"))
+    d = str(Path(__file__).parent / "composer")
+    if d not in sys.path:           # once: this ran per starred render every 5 s and grew sys.path without bound
+        sys.path.insert(0, d)
     import compose
     return compose.sha256(p)
 
@@ -80,7 +82,6 @@ def _idle() -> bool:
 def _encode_lat(path: Path) -> np.ndarray:
     """(C, T) float32 SAME-L latents of a whole file, encoded in ≤ CHUNK_S pieces."""
     up = _up
-    mx = up.mx
     y = up.read_audio_any(str(path))
     enc, pad_mod = up.get_encoder("same-l")
     out = []
@@ -158,13 +159,20 @@ def encode_one(p: Path) -> None:
     tmp.replace(f)
 
 
+_failed: dict = {}                  # path → failed encodes this process; skipped after MAX_FAIL
+
+
+MAX_FAIL = 2
+
+
 def _worker() -> None:
     while True:
         time.sleep(5)
+        p = None
         try:
             if not _idle():
                 continue
-            todo = [p for p in starred() if not _file(p).is_file()]
+            todo = [p for p in starred() if _failed.get(p, 0) < MAX_FAIL and not _file(p).is_file()]
             if not todo:
                 _refresh_prompt()
                 continue
@@ -172,10 +180,13 @@ def _worker() -> None:
             _state["busy"] = library.render_id(p)
             encode_one(p)
             _idx.clear()
+            _up.mlx_call(_up._free_to_pool)  # the encoder's scratch buffers back to the OS (studio.py's rule)
         except InterruptedError:
             pass
         except Exception as e:  # noqa: BLE001
             _state["last_error"] = f"{type(e).__name__}: {e}"[:300]
+            if p is not None:       # a file that keeps failing no longer blocks the rest of the queue
+                _failed[p] = _failed.get(p, 0) + 1
             time.sleep(30)
         finally:
             _state["busy"] = None

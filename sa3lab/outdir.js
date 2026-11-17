@@ -107,7 +107,7 @@
   const KEEP = 9;
   let liveTried = null;
   async function live() {
-    if (document.body.classList.contains("sa3-busy")) return;
+    if (document.body.classList.contains("sa3-busy") || document.hidden) return;
     let j;
     try { const r = await fetch("sa3/outdir/newest", { cache: "no-store" }); if (!r.ok) return; j = await r.json(); } catch (e) { return; }
     if (!j.newest || j.newest === liveTried) return;
